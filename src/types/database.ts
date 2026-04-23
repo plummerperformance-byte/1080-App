@@ -116,6 +116,8 @@ export type SprintMetrics = {
   profile_classification: string | null;
   weakest_split: string | null;
   fv_profile_valid: boolean;
+  /** Downsampled velocity/position samples (≈300 points) for chart rendering. */
+  chart_samples: Array<{ t: number; v: number; x: number }> | null;
   created_at: string;
   updated_at: string;
 };

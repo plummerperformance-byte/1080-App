@@ -6,10 +6,13 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  ComposedChart,
   Legend,
   Line,
   LineChart,
+  ReferenceArea,
   ResponsiveContainer,
+  Scatter,
   Tooltip,
   XAxis,
   YAxis,
@@ -141,12 +144,35 @@ export default function SessionPage({ params }: { params: { id: string } }) {
 
   const splitsChart = [
     { label: "10 m", actual: metrics.split_10m_s, elite: n("split_10m_s")?.great_max ?? null },
-    { label: "20 m", actual: metrics.split_20m_s, elite: null },
-    { label: "30 m", actual: metrics.split_30m_s, elite: null },
+    { label: "20 m", actual: metrics.split_20m_s, elite: n("split_20m_s")?.great_max ?? null },
+    { label: "30 m", actual: metrics.split_30m_s, elite: n("split_30m_s")?.great_max ?? null },
     { label: "40 m", actual: metrics.split_40m_s, elite: n("split_40m_s")?.great_max ?? null },
   ];
 
   const fvValid = metrics.fv_profile_valid;
+
+  // Velocity-over-position line: stored downsampled samples from the parser.
+  const vxSamples = (metrics.chart_samples ?? []).map((s) => ({ x: s.x, v: s.v }));
+  const maxX = vxSamples.length
+    ? Math.max(...vxSamples.map((s) => s.x))
+    : sprint.distance_reached_m ?? 40;
+
+  // Step markers: position at foot-strike for each step. Derive from running
+  // sum of step_length_m (some rows may have null lengths — skip those).
+  // Anchored at a fixed low y so markers sit just above the x-axis.
+  const STEP_MARKER_Y = 0.4;
+  let cum = 0;
+  const stepMarkers = steps
+    .map((s) => {
+      if (s.step_length_m == null) return null;
+      cum += Number(s.step_length_m);
+      return { x: cum, y: STEP_MARKER_Y, step: s.step_number };
+    })
+    .filter((m): m is { x: number; y: number; step: number } => m !== null);
+
+  // Phase shading endpoints — 0–10 m acceleration, 10+ m max-velocity.
+  const accelEnd = Math.min(10, maxX);
+  const maxvEnd = Math.min(40, maxX);
 
   return (
     <section className="space-y-8">
@@ -224,6 +250,93 @@ export default function SessionPage({ params }: { params: { id: string } }) {
         />
       </div>
 
+      <div className="rounded-lg border border-gray-200 bg-white p-6">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-ppa-muted">
+            Velocity over position
+          </h2>
+          {sprint.steps_derived === true ? (
+            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-800">
+              Steps derived from velocity
+            </span>
+          ) : steps.length > 0 ? (
+            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-ppa-muted">
+              Steps from 1080 Step Table
+            </span>
+          ) : null}
+        </div>
+        <div className="mt-2 text-xs text-ppa-muted">
+          Shaded bands: 0–10 m acceleration · 10+ m max-velocity. Dots on the
+          x-axis = foot-strikes.
+        </div>
+        <div className="mt-4 h-72 w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart margin={{ top: 10, right: 20, bottom: 20, left: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                dataKey="x"
+                type="number"
+                domain={[0, Math.ceil(maxX)]}
+                tickCount={Math.min(9, Math.ceil(maxX) + 1)}
+                label={{ value: "Position (m)", position: "insideBottom", offset: -5 }}
+              />
+              <YAxis
+                type="number"
+                domain={[0, "auto"]}
+                label={{ value: "Speed (m/s)", angle: -90, position: "insideLeft" }}
+              />
+              <Tooltip
+                formatter={(v, name) => {
+                  if (typeof v !== "number") return "—";
+                  if (name === "step") return [`#${v}`, "Step"];
+                  return [v.toFixed(2), name === "v" ? "Speed (m/s)" : name];
+                }}
+                labelFormatter={(label) =>
+                  typeof label === "number" ? `${label.toFixed(1)} m` : String(label)
+                }
+              />
+              {accelEnd > 0 ? (
+                <ReferenceArea
+                  x1={0}
+                  x2={accelEnd}
+                  fill="#EF4444"
+                  fillOpacity={0.05}
+                  ifOverflow="hidden"
+                />
+              ) : null}
+              {maxvEnd > accelEnd ? (
+                <ReferenceArea
+                  x1={accelEnd}
+                  x2={maxvEnd}
+                  fill="#1F2937"
+                  fillOpacity={0.04}
+                  ifOverflow="hidden"
+                />
+              ) : null}
+              <Line
+                data={vxSamples}
+                dataKey="v"
+                type="monotone"
+                stroke="#EF4444"
+                strokeWidth={2}
+                dot={false}
+                isAnimationActive={false}
+                name="v"
+              />
+              <Scatter
+                data={stepMarkers}
+                dataKey="y"
+                fill="#1F2937"
+                line={false}
+                shape="circle"
+                name="step"
+                legendType="none"
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="rounded-lg border border-gray-200 bg-white p-6">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-ppa-muted">
@@ -234,7 +347,7 @@ export default function SessionPage({ params }: { params: { id: string } }) {
               ? "Linear F(v). F₀/V₀ anchors with slope F₀/V₀."
               : "Chart shown for reference — fit is invalid for this sprint."}
           </div>
-          <div className="mt-4 h-64 w-full">
+          <div className="mt-4 h-56 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={fvChart} margin={{ top: 10, right: 20, bottom: 20, left: 10 }}>
                 <CartesianGrid strokeDasharray="3 3" />
@@ -267,9 +380,9 @@ export default function SessionPage({ params }: { params: { id: string } }) {
             Splits vs elite reference
           </h2>
           <div className="mt-2 text-xs text-ppa-muted">
-            Dashed line = "Great" band boundary at 10/40 m (lower is better).
+            Green bar = "Great" band boundary for each split (lower is better).
           </div>
-          <div className="mt-4 h-64 w-full">
+          <div className="mt-4 h-56 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={splitsChart} margin={{ top: 10, right: 20, bottom: 20, left: 10 }}>
                 <CartesianGrid strokeDasharray="3 3" />
@@ -296,20 +409,76 @@ export default function SessionPage({ params }: { params: { id: string } }) {
             <Row label="Body mass" value={fmt(session.body_mass_kg, 1, " kg")} />
             <Row label="Distance reached" value={fmt(sprint.distance_reached_m, 2, " m")} />
             <Row label="Duration" value={fmt(sprint.duration_s, 2, " s")} />
-            <Row label="Max V" value={fmt(metrics.max_v_ms, 3, " m/s")} />
+            <Row
+              label="Max V"
+              value={fmt(metrics.max_v_ms, 3, " m/s")}
+              band={r("max_v_ms", metrics.max_v_ms)}
+            />
             <Row label="Time to max V" value={fmt(metrics.time_to_max_v_s, 3, " s")} sub={fmt(metrics.dist_to_max_v_m, 2, " m")} />
             <Row label="Time to 90% V" value={fmt(metrics.time_to_90pct_v_s, 3, " s")} sub={fmt(metrics.dist_to_90pct_v_m, 2, " m")} />
             <Row label="τ" value={fmt(metrics.tau, 3)} />
-            <Row label="F₀" value={fmt(metrics.f0_rel_nkg, 2, " N/kg")} sub={fmt(metrics.f0_n, 1, " N total")} />
-            <Row label="V₀" value={fmt(metrics.v0_ms, 3, " m/s")} />
-            <Row label="Pmax" value={fmt(metrics.pmax_rel_wkg, 2, " W/kg")} sub={fmt(metrics.pmax_w, 0, " W total")} />
+            <Row
+              label="F₀"
+              value={fmt(metrics.f0_rel_nkg, 2, " N/kg")}
+              sub={fmt(metrics.f0_n, 1, " N total")}
+              band={r("f0_rel_nkg", metrics.f0_rel_nkg)}
+            />
+            <Row
+              label="V₀"
+              value={fmt(metrics.v0_ms, 3, " m/s")}
+              band={r("v0_ms", metrics.v0_ms)}
+            />
+            <Row
+              label="Pmax"
+              value={fmt(metrics.pmax_rel_wkg, 2, " W/kg")}
+              sub={fmt(metrics.pmax_w, 0, " W total")}
+              band={r("pmax_rel_wkg", metrics.pmax_rel_wkg)}
+            />
             <Row label="F-V slope" value={fmt(metrics.fv_slope, 3)} />
             <Row label="F-V imbalance" value={fmt(metrics.fv_imbalance_pct, 1, "%")} />
-            <Row label="RFmax" value={fmt(metrics.rf_max_pct, 2, "%")} />
-            <Row label="DRF" value={fmt(metrics.drf, 3)} />
+            <Row
+              label="10 m split"
+              value={fmt(metrics.split_10m_s, 3, " s")}
+              band={r("split_10m_s", metrics.split_10m_s)}
+            />
+            <Row
+              label="20 m split"
+              value={fmt(metrics.split_20m_s, 3, " s")}
+              band={r("split_20m_s", metrics.split_20m_s)}
+            />
+            <Row
+              label="30 m split"
+              value={fmt(metrics.split_30m_s, 3, " s")}
+              band={r("split_30m_s", metrics.split_30m_s)}
+            />
+            <Row
+              label="40 m split"
+              value={fmt(metrics.split_40m_s, 3, " s")}
+              band={r("split_40m_s", metrics.split_40m_s)}
+            />
+            <Row
+              label="RFmax"
+              value={fmt(metrics.rf_max_pct, 2, "%")}
+              band={r("rf_max_pct", metrics.rf_max_pct)}
+            />
+            <Row
+              label="DRF"
+              value={fmt(metrics.drf, 3)}
+              band={r("drf", metrics.drf)}
+            />
             <Row label="Peak accel" value={fmt(metrics.peak_accel_ms2, 2, " m/s²")} />
             <Row label="Peak power" value={fmt(metrics.peak_power_rel_wkg, 2, " W/kg")} sub={fmt(metrics.peak_power_w, 0, " W total")} />
             <Row label="V drop-off" value={fmt(metrics.v_dropoff_pct, 2, "%")} />
+            <Row
+              label="Step freq"
+              value={fmt(metrics.step_freq_hz, 2, " Hz")}
+              band={r("step_freq_hz", metrics.step_freq_hz)}
+            />
+            <Row
+              label="Avg step length"
+              value={fmt(metrics.avg_step_length_m, 2, " m")}
+              band={r("avg_step_length_m", metrics.avg_step_length_m)}
+            />
           </div>
         </div>
 

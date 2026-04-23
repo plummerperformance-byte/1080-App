@@ -97,6 +97,7 @@ export async function saveSprintSession(
     fv_profile_valid: parsed.fvProfileValid,
     weakest_split: parsed.classification.sprintProfile,
     profile_classification: parsed.classification.fvBalance,
+    chart_samples: parsed.chartSamples,
   });
   if (metricsErr) {
     throw new Error(`Sprint metrics insert failed: ${metricsErr.message}`);
