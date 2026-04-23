@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
   Bar,
@@ -19,6 +20,7 @@ import {
 } from "recharts";
 import { RankCard } from "@/components/RankCard";
 import { Row } from "@/components/Row";
+import { deleteSession } from "@/lib/delete-session";
 import { rankValue, selectNorm } from "@/lib/norms";
 import { createClient } from "@/lib/supabase/client";
 import type {
@@ -46,8 +48,11 @@ function fmt(n: number | null | undefined, digits = 2, suffix = ""): string {
 
 export default function SessionPage({ params }: { params: { id: string } }) {
   const supabase = useMemo(() => createClient(), []);
+  const router = useRouter();
   const [bundle, setBundle] = useState<Bundle | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -127,6 +132,28 @@ export default function SessionPage({ params }: { params: { id: string } }) {
   }
 
   const { session, athlete, sprint, metrics, steps, norms } = bundle;
+
+  async function handleDelete() {
+    const ok = window.confirm(
+      `Delete this session (${session.session_date}, ${athlete.full_name})?\n\n` +
+        "This removes the sprint, all step events, and the raw xlsx file from Storage. " +
+        "Cannot be undone.",
+    );
+    if (!ok) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const { storageWarning } = await deleteSession(supabase, {
+        sessionId: session.id,
+        athleteId: athlete.id,
+      });
+      if (storageWarning) console.warn(storageWarning);
+      router.push(`/athletes/${athlete.id}`);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : String(err));
+      setDeleting(false);
+    }
+  }
   const ctx = {
     sport: athlete.sport,
     level: athlete.level,
@@ -541,6 +568,25 @@ export default function SessionPage({ params }: { params: { id: string } }) {
           <div className="mt-1">{session.notes}</div>
         </div>
       ) : null}
+
+      <div className="flex items-center justify-between border-t border-gray-200 pt-6">
+        <div className="text-xs text-ppa-muted">
+          Session id: <span className="font-mono">{session.id}</span>
+        </div>
+        <div className="flex items-center gap-3">
+          {deleteError ? (
+            <span className="text-xs text-ppa-red">{deleteError}</span>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void handleDelete()}
+            disabled={deleting}
+            className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-ppa-red hover:bg-red-50 disabled:opacity-50"
+          >
+            {deleting ? "Deleting…" : "Delete session"}
+          </button>
+        </div>
+      </div>
     </section>
   );
 }
