@@ -13,7 +13,7 @@ PPA owns a **1080 Sprint** (resisted/assisted sprint trainer). Its native tablet
 
 **This app fixes that.** Coach uploads a 1080 xlsx → app parses it → all metrics (F₀, V₀, Pmax, splits, step mechanics) save to Supabase → dashboard shows session + rugby norm rankings + trend charts over time. Optional Phase 2: add GCT/stiffness data from an external sensor (OptoGait, Playermaker).
 
-The schema and parser logic are both already designed and tested. Your job is to build a clean Next.js 14 app around them that compiles, deploys to Vercel, and works against Supabase project `dnwdyddwtisqfyxzyiyr` (already provisioned with the schema).
+The schema and parser logic are both already designed and tested. Your job is to build a clean Next.js 14 app around them that compiles, deploys to Vercel, and works against Supabase project `mjjxwiszqagpdmldkzwt` (already provisioned with the schema).
 
 ---
 
@@ -39,7 +39,7 @@ The schema and parser logic are both already designed and tested. Your job is to
 
 **Option A (recommended):** Pin `@supabase/supabase-js@^2.45.4`. This version has straightforward generics that accept `Database` types built with `Partial<Row>` for Insert/Update. The schema you're targeting doesn't use any 2.104-only features, so there's zero runtime downside.
 
-**Option B:** Use `@supabase/supabase-js@latest` AND install the Supabase CLI, run `supabase gen types typescript --project-id dnwdyddwtisqfyxzyiyr > src/types/database.generated.ts` AFTER the schema is applied. This produces the exact type shape the library expects. Don't hand-write it.
+**Option B:** Use `@supabase/supabase-js@latest` AND install the Supabase CLI, run `supabase gen types typescript --project-id mjjxwiszqagpdmldkzwt > src/types/database.generated.ts` AFTER the schema is applied. This produces the exact type shape the library expects. Don't hand-write it.
 
 **Do not** try option C ("hand-write types for 2.104"). I burned an hour and the types still resolved to `never` in insert calls. If you go Option B, delete my reference `database-types.reference.ts` and use the generated file.
 
@@ -100,7 +100,7 @@ When the coach drops an xlsx:
 
 Schema is at `reference/schema.sql`. **Run this FIRST** in Supabase SQL Editor before coding:
 
-- Project: `https://supabase.com/dashboard/project/dnwdyddwtisqfyxzyiyr`
+- Project: `https://supabase.com/dashboard/project/mjjxwiszqagpdmldkzwt`
 - SQL Editor → New Query → paste full contents → Run
 - Storage: create a private bucket named `raw-1080-files`
 
@@ -146,7 +146,7 @@ function rankValue(value, norm) {
 ## Environment
 
 ```
-NEXT_PUBLIC_SUPABASE_URL=https://dnwdyddwtisqfyxzyiyr.supabase.co
+NEXT_PUBLIC_SUPABASE_URL=https://mjjxwiszqagpdmldkzwt.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<from Settings → API>
 ```
 

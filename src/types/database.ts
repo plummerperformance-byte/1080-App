@@ -5,7 +5,7 @@
  * omit auto-populated columns (id, created_at, updated_at, defaults).
  *
  * If you upgrade to supabase-js >= 2.104 later, replace this file with a
- * generated one: `supabase gen types typescript --project-id dnwdyddwtisqfyxzyiyr`.
+ * generated one: `supabase gen types typescript --project-id mjjxwiszqagpdmldkzwt`.
  */
 
 export type SexEnum = "male" | "female" | "other";
