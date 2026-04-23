@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Field } from "@/components/Field";
 import { Select } from "@/components/Select";
@@ -47,6 +47,7 @@ const EMPTY_FORM: FormState = {
 
 export default function AthletesPage() {
   const supabase = useMemo(() => createClient(), []);
+  const router = useRouter();
   const [athletes, setAthletes] = useState<Athlete[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -223,23 +224,22 @@ export default function AthletesPage() {
             </thead>
             <tbody>
               {athletes.map((a) => (
-                <tr key={a.id} className="border-b border-gray-100 last:border-0">
-                  <td className="px-6 py-2 font-medium">{a.full_name}</td>
-                  <td className="px-6 py-2 text-ppa-muted">{a.sport}</td>
-                  <td className="px-6 py-2 text-ppa-muted">{a.level}</td>
-                  <td className="px-6 py-2 text-ppa-muted">
-                    {a.position ?? "—"}
+                <tr
+                  key={a.id}
+                  className="cursor-pointer border-b border-gray-100 transition last:border-0 hover:bg-gray-50"
+                  onClick={() => router.push(`/athletes/${a.id}`)}
+                >
+                  <td className="px-6 py-3 font-medium">{a.full_name}</td>
+                  <td className="px-6 py-3 text-ppa-muted">{a.sport.replace(/_/g, " ")}</td>
+                  <td className="px-6 py-3 text-ppa-muted">{a.level.replace(/_/g, " ")}</td>
+                  <td className="px-6 py-3 text-ppa-muted">
+                    {a.position ?? a.position_group.replace(/_/g, " ")}
                   </td>
-                  <td className="px-6 py-2 text-right tabular">
+                  <td className="px-6 py-3 text-right tabular">
                     {a.body_mass_kg != null ? `${a.body_mass_kg} kg` : "—"}
                   </td>
-                  <td className="px-6 py-2 text-right">
-                    <Link
-                      href={`/athletes/${a.id}`}
-                      className="text-ppa-navy hover:text-ppa-red"
-                    >
-                      View →
-                    </Link>
+                  <td className="px-6 py-3 text-right text-ppa-muted">
+                    Open →
                   </td>
                 </tr>
               ))}
