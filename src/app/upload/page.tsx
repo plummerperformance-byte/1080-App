@@ -28,6 +28,7 @@ export default function UploadPage() {
   );
   const [testType, setTestType] = useState<TestTypeEnum>("unresisted_sprint");
   const [notes, setNotes] = useState<string>("");
+  const [bodyMassOverride, setBodyMassOverride] = useState<string>("");
 
   const [file, setFile] = useState<File | null>(null);
   const [parsed, setParsed] = useState<ParsedSprint | null>(null);
@@ -53,20 +54,40 @@ export default function UploadPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleFile = useCallback(async (f: File) => {
-    setFile(f);
-    setParsed(null);
-    setParseError(null);
-    setParsing(true);
-    try {
-      const result = await parse1080File(f);
-      setParsed(result);
-    } catch (err) {
-      setParseError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setParsing(false);
+  // Keep the body-mass override field in sync with whichever athlete is
+  // currently selected — user can still edit it before parsing.
+  const selectedAthlete = useMemo(
+    () => athletes.find((a) => a.id === athleteId) ?? null,
+    [athletes, athleteId],
+  );
+  useEffect(() => {
+    if (selectedAthlete?.body_mass_kg != null) {
+      setBodyMassOverride(String(selectedAthlete.body_mass_kg));
+    } else {
+      setBodyMassOverride("");
     }
-  }, []);
+  }, [selectedAthlete]);
+
+  const handleFile = useCallback(
+    async (f: File) => {
+      setFile(f);
+      setParsed(null);
+      setParseError(null);
+      setParsing(true);
+      try {
+        const bm = bodyMassOverride ? Number(bodyMassOverride) : undefined;
+        const result = await parse1080File(f, {
+          bodyMassKgOverride: Number.isFinite(bm) && bm! > 0 ? bm : undefined,
+        });
+        setParsed(result);
+      } catch (err) {
+        setParseError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setParsing(false);
+      }
+    },
+    [bodyMassOverride],
+  );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: {
@@ -120,12 +141,20 @@ export default function UploadPage() {
         </p>
       </div>
 
-      <div className="grid gap-4 rounded-lg border border-gray-200 bg-white p-6 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 rounded-lg border border-gray-200 bg-white p-6 sm:grid-cols-2 lg:grid-cols-5">
         <Select
           label="Athlete *"
           options={athletes.map((a) => ({ value: a.id, label: a.full_name }))}
           value={athleteId}
           onChange={(e) => setAthleteId(e.target.value)}
+        />
+        <Field
+          label="Body mass (kg)"
+          type="number"
+          step="0.1"
+          value={bodyMassOverride}
+          onChange={(e) => setBodyMassOverride(e.target.value)}
+          placeholder="Prefilled from athlete"
         />
         <Field
           label="Session date"

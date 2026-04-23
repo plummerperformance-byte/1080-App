@@ -106,17 +106,72 @@ export interface ChartSample {
 // Main entry point
 // ---------------------------------------------------------------------------
 
-export async function parse1080File(file: File | ArrayBuffer): Promise<ParsedSprint> {
+export interface Parse1080Options {
+  /**
+   * Athlete body mass in kg. Required for raw-tablet exports (the tablet
+   * export doesn't contain body mass). For Dashboard exports this is read
+   * from the workbook's col L if not provided.
+   */
+  bodyMassKgOverride?: number;
+}
+
+export async function parse1080File(
+  file: File | ArrayBuffer,
+  options?: Parse1080Options,
+): Promise<ParsedSprint> {
   const buf = file instanceof ArrayBuffer ? file : await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array", cellDates: false });
 
-  const rawSheetName = wb.SheetNames.find((n) => n.startsWith("Raw Data"));
-  if (!rawSheetName) throw new Error("No 'Raw Data' sheet found in workbook.");
-  const raw = wb.Sheets[rawSheetName];
+  const format = detectFormat(wb);
+  if (format === "unknown") {
+    throw new Error(
+      "Unrecognised 1080 export format. Expected either the Dashboard workbook " +
+        "(sheet named 'Raw Data <date>') or the raw tablet export (first sheet " +
+        "with headers time(ms) / load(g) / speed / position(mm)).",
+    );
+  }
 
-  // Pull sprint samples: derived columns G (time s), H (speed m/s), I (dist m),
-  // M (horiz force N), O (accel m/s²), P (power W), R (RF%)
-  const samples = extractSprintSamples(raw);
+  const warnings: string[] = [];
+  let samples: Sample[];
+  let bodyMassKg: number;
+  let avgLoadKg: number;
+  // Only the Dashboard format has rich derived columns (RF%, power, force);
+  // we keep a handle on the raw sheet to read them. For raw-tablet we can't.
+  let derivedSheet: XLSX.WorkSheet | null = null;
+
+  if (format === "dashboard") {
+    const rawSheetName = wb.SheetNames.find((n) => n.startsWith("Raw Data"));
+    derivedSheet = wb.Sheets[rawSheetName as string];
+    samples = extractSprintSamples(derivedSheet);
+    const fileBodyMass = pickFirstNumber(derivedSheet, "L");
+    bodyMassKg = options?.bodyMassKgOverride ?? fileBodyMass ?? 0;
+    if (!bodyMassKg) {
+      throw new Error(
+        "Dashboard export: could not read body mass from col L and no override provided.",
+      );
+    }
+    const avgLoadG = meanColumn(derivedSheet, "K", samples.length);
+    avgLoadKg = avgLoadG / 1000;
+  } else {
+    const firstSheet = wb.Sheets[wb.SheetNames[0]];
+    const extracted = extractRawTabletSamples(firstSheet);
+    samples = extracted.samples;
+    if (options?.bodyMassKgOverride == null || options.bodyMassKgOverride <= 0) {
+      throw new Error(
+        "Raw tablet export: athlete body mass required (the tablet export " +
+          "doesn't include it). Set body_mass_kg on the athlete or override on upload.",
+      );
+    }
+    bodyMassKg = options.bodyMassKgOverride;
+    avgLoadKg = extracted.loads.length
+      ? extracted.loads.reduce((s, v) => s + v, 0) / extracted.loads.length / 1000
+      : 0;
+    warnings.push(
+      "Raw tablet export: RF%, DRF and peak power are not available in this " +
+        "format (they're post-processed columns added by the 1080 Dashboard " +
+        "export). Kinematic metrics (Max V, splits, F₀/V₀/Pmax) are fine.",
+    );
+  }
 
   if (samples.length < 100) {
     throw new Error(
@@ -124,14 +179,6 @@ export async function parse1080File(file: File | ArrayBuffer): Promise<ParsedSpr
         `Expected >1000 at 1 kHz sampling.`,
     );
   }
-
-  // Body mass from col L
-  const bodyMassKg = pickFirstNumber(raw, "L") ?? 0;
-  if (!bodyMassKg) throw new Error("Could not read athlete body mass from Raw Data col L.");
-
-  // Avg load (grams) from col K, convert to kg
-  const avgLoadG = meanColumn(raw, "K", samples.length);
-  const avgLoadKg = avgLoadG / 1000;
 
   const maxDistM = Math.max(...samples.map((s) => s.x));
   const durationS = samples[samples.length - 1].t;
@@ -160,7 +207,9 @@ export async function parse1080File(file: File | ArrayBuffer): Promise<ParsedSpr
   // Acceleration & force derivation (F = m*a, horizontal only here since
   // the 1080 raw force already nets out tether and drag contributions).
   const peakAccelMs2 = (maxVms / tau);  // a(0) from the model
-  const peakPowerW = peakSampleField(raw, "P", samples.length);
+  const peakPowerW = derivedSheet
+    ? peakSampleField(derivedSheet, "P", samples.length)
+    : 0;
 
   // Samozino F0 / V0 / Pmax / slope
   // Use the simple form for an unresisted exponential fit:
@@ -175,8 +224,11 @@ export async function parse1080File(file: File | ArrayBuffer): Promise<ParsedSpr
   const pmaxW = pmaxRelWkg * bodyMassKg;
   const fvSlope = -f0RelNkg / v0Ms;
 
-  // RFmax and DRF from the raw RF% column (R) vs speed (H)
-  const { rfMaxPct, drf } = computeRfMetrics(raw, samples);
+  // RFmax and DRF from the raw RF% column (R) vs speed (H). Only available
+  // for Dashboard format — raw tablet exports don't have RF%.
+  const { rfMaxPct, drf } = derivedSheet
+    ? computeRfMetrics(derivedSheet, samples)
+    : { rfMaxPct: 0, drf: 0 };
 
   // ---------- Splits ----------------------------------------------------
   const split10 = firstSampleAtDist(samples, 10);
@@ -214,7 +266,6 @@ export async function parse1080File(file: File | ArrayBuffer): Promise<ParsedSpr
   const chartSamples = downsample(samples, 300);
 
   // ---------- Validity & classification --------------------------------
-  const warnings: string[] = [];
   const fvProfileValid = avgLoadKg <= bodyMassKg * 0.10; // ≤10% BM counts as "essentially unresisted" (Samozino practice)
   if (!fvProfileValid) {
     warnings.push(
@@ -478,6 +529,71 @@ function extractStepTable(wb: XLSX.WorkBook): StepEventOut[] {
 function numOrNull(v: any): number | null {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Detect which 1080 export format a workbook is.
+ *
+ * - "dashboard": post-processed Excel with a "Raw Data <date>" sheet containing
+ *   derived columns (G=time_s, H=speed_m/s, I=dist_m, K=load_g, L=bodyMass_kg,
+ *   M=force_N, O=accel, P=power_W, R=RF%).
+ *
+ * - "raw_tablet": the raw tablet export. First sheet has a header row
+ *   `time(ms) | load(g) | speed(...) | position(mm)`. Values in ms / g / mm/s
+ *   / mm. No body mass, no RF%, no Step Table.
+ */
+function detectFormat(wb: XLSX.WorkBook): "dashboard" | "raw_tablet" | "unknown" {
+  if (wb.SheetNames.some((n) => n.startsWith("Raw Data"))) return "dashboard";
+
+  const firstSheet = wb.Sheets[wb.SheetNames[0]];
+  if (!firstSheet) return "unknown";
+  const hdr = (addr: string): string => {
+    const v = firstSheet[addr]?.v;
+    return typeof v === "string" ? v.trim().toLowerCase() : "";
+  };
+  const a = hdr("A1");
+  const b = hdr("B1");
+  const c = hdr("C1");
+  const d = hdr("D1");
+  if (
+    a.startsWith("time") &&
+    b.startsWith("load") &&
+    c.startsWith("speed") &&
+    d.startsWith("position")
+  ) {
+    return "raw_tablet";
+  }
+  return "unknown";
+}
+
+/**
+ * Pull samples from a raw tablet export. Columns on the first sheet are:
+ *   A: time(ms)      → seconds
+ *   B: load(g)       → grams (returned separately for avg-load computation)
+ *   C: speed(mm/s)   → m/s
+ *   D: position(mm)  → metres
+ * Stops at the first blank time.
+ */
+function extractRawTabletSamples(
+  ws: XLSX.WorkSheet,
+): { samples: Sample[]; loads: number[] } {
+  const samples: Sample[] = [];
+  const loads: number[] = [];
+  const range = XLSX.utils.decode_range(ws["!ref"] ?? "A1:A1");
+  for (let r = 1; r <= range.e.r; r++) {
+    const tMs = ws[XLSX.utils.encode_cell({ c: 0, r })]?.v;
+    const loadG = ws[XLSX.utils.encode_cell({ c: 1, r })]?.v;
+    const speedMms = ws[XLSX.utils.encode_cell({ c: 2, r })]?.v;
+    const posMm = ws[XLSX.utils.encode_cell({ c: 3, r })]?.v;
+    if (tMs === undefined || tMs === null || tMs === "") break;
+    const t = Number(tMs) / 1000;
+    const v = Number(speedMms) / 1000;
+    const x = Number(posMm) / 1000;
+    if (!Number.isFinite(t) || !Number.isFinite(v) || !Number.isFinite(x)) continue;
+    samples.push({ t, v, x });
+    if (typeof loadG === "number" && Number.isFinite(loadG)) loads.push(loadG);
+  }
+  return { samples, loads };
 }
 
 function downsample(samples: Sample[], target: number): ChartSample[] {
