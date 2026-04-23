@@ -188,13 +188,18 @@ export default function SessionPage({ params }: { params: { id: string } }) {
     ? Math.max(...vxSamples.map((s) => s.v))
     : metrics.max_v_ms ?? 10;
 
-  // Step markers: position at foot-strike for each step. Derive from running
-  // sum of step_length_m (some rows may have null lengths — skip those).
+  // Step markers: position at foot-strike for each step. Prefer the
+  // persisted position_m (parser-authoritative, reflects actual sample
+  // coordinates). Fall back to cumulative step_length for older sessions
+  // saved before position_m was added — not ideal, but doesn't crash.
   // Anchored at a fixed low y so markers sit just above the x-axis.
   const STEP_MARKER_Y = 0.4;
   let cum = 0;
   const stepMarkers = steps
     .map((s) => {
+      if (s.position_m != null) {
+        return { x: Number(s.position_m), y: STEP_MARKER_Y, step: s.step_number };
+      }
       if (s.step_length_m == null) return null;
       cum += Number(s.step_length_m);
       return { x: cum, y: STEP_MARKER_Y, step: s.step_number };

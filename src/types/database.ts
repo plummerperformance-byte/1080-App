@@ -135,6 +135,8 @@ export type StepEvent = {
   step_length_m: number | null;
   step_velocity_ms: number | null;
   step_frequency_hz: number | null;
+  /** Distance from sprint start at foot-strike. Preferred over cumulative step_length for chart markers. */
+  position_m: number | null;
   peak_force_n: number | null;
   peak_force_left_n: number | null;
   peak_force_right_n: number | null;

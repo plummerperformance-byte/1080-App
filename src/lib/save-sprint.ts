@@ -110,6 +110,7 @@ export async function saveSprintSession(
       step_number: s.stepNumber,
       foot_side: "unknown" as const,
       t_strike_s: s.tStrikeS,
+      position_m: s.positionM,
       step_length_m: s.stepLengthM,
       step_velocity_ms: s.stepVelocityMs,
       step_frequency_hz: s.stepFrequencyHz,

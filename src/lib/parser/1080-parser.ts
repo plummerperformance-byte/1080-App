@@ -115,6 +115,8 @@ export interface SprintMetricsOut {
 export interface StepEventOut {
   stepNumber: number;
   tStrikeS: number | null;
+  /** Distance from sprint start (0 m) at which foot-strike occurs. Used for chart markers. */
+  positionM: number | null;
   stepLengthM: number | null;
   stepVelocityMs: number | null;
   stepFrequencyHz: number | null;
@@ -587,7 +589,7 @@ function extractStepTable(wb: XLSX.WorkBook): StepEventOut[] {
   if (!name) return [];
   const ws = wb.Sheets[name];
   const rows = XLSX.utils.sheet_to_json<any>(ws, { defval: null });
-  return rows
+  const extracted = rows
     .map((row, i) => {
       // Helper — key lookup tolerant to whitespace variations
       const get = (...keys: string[]): any => {
@@ -606,6 +608,7 @@ function extractStepTable(wb: XLSX.WorkBook): StepEventOut[] {
       return {
         stepNumber: num,
         tStrikeS: numOrNull(tStrike),
+        positionM: null as number | null, // filled in below via running cumulative
         stepLengthM: numOrNull(stepLen),
         stepVelocityMs: numOrNull(stepVel),
         stepFrequencyHz: numOrNull(stepFreq),
@@ -614,6 +617,17 @@ function extractStepTable(wb: XLSX.WorkBook): StepEventOut[] {
       };
     })
     .filter((s) => Number.isFinite(s.stepNumber) && s.stepNumber > 0);
+
+  // positionM for 1080 Step Table steps: step N's strike sits at the sum of
+  // the preceding steps' lengths. Step 1 starts at 0.
+  let cum = 0;
+  for (const s of extracted) {
+    s.positionM = cum;
+    if (typeof s.stepLengthM === "number" && Number.isFinite(s.stepLengthM)) {
+      cum += s.stepLengthM;
+    }
+  }
+  return extracted;
 }
 
 function numOrNull(v: any): number | null {
@@ -834,6 +848,7 @@ function deriveStepsFromVelocity(samples: Sample[]): StepEventOut[] {
     steps.push({
       stepNumber: k + 1,
       tStrikeS: t1,
+      positionM: samples[i1].x,
       stepLengthM: samples[i2].x - samples[i1].x,
       stepVelocityMs: (samples[i2].x - samples[i1].x) / period,
       stepFrequencyHz: 1 / period,
