@@ -30,23 +30,44 @@ import * as XLSX from "xlsx";
 // ---------------------------------------------------------------------------
 
 export interface ParsedSprint {
+  /** Which export format the file came from. */
+  format: "dashboard" | "raw_tablet";
+  /**
+   * Where the sprint started in the source file's own timeline, in seconds.
+   * Dashboard exports are pre-trimmed (0.0 always). Raw-tablet exports
+   * include walk-up/warm-up before the sprint, so this is the offset that
+   * was subtracted to make all metrics sprint-relative.
+   */
+  sprintStartOffsetS: number;
   /** Body mass used by the 1080 for force calcs (kg) */
   bodyMassKg: number;
   /** Mean load applied by the 1080 (kg) */
   avgLoadKg: number;
-  /** Max distance reached in the sprint (m) */
+  /** Max distance reached in the sprint (m), after re-normalizing to start=0 */
   maxDistM: number;
-  /** Sprint duration (s) */
+  /** Sprint duration (s), sprint-relative */
   durationS: number;
-  /** Count of raw samples used */
+  /** Count of raw samples used (after trimming to the sprint window) */
   sampleCount: number;
 
   /** Core sprint metrics */
   metrics: SprintMetricsOut;
-  /** Per-step data (from 1080's own step table) */
+  /** Per-step data (from 1080's own step table OR derived from velocity). */
   steps: StepEventOut[];
+  /**
+   * Whether `steps` was derived from velocity oscillation (true) vs read
+   * from the 1080's own Step Table (false). GCT/stiffness stay null either
+   * way — they require a second sensor.
+   */
+  stepsDerived: boolean;
   /** Sampled v(t) and x(t) for charting (max ~300 points) */
   chartSamples: ChartSample[];
+
+  /**
+   * Whether the Dashboard-only metrics (rfMaxPct, drf, peakPowerW,
+   * peakPowerRelWkg) were populated. False for raw_tablet exports.
+   */
+  hasDerivedColumns: boolean;
 
   /** Validity flags and classification */
   fvProfileValid: boolean;
@@ -75,11 +96,15 @@ export interface SprintMetricsOut {
   pmaxRelWkg: number;
   fvSlope: number;
   fvImbalancePct: number | null;
-  rfMaxPct: number;
-  drf: number;
+  /** Null when the source file doesn't have an RF% column (raw-tablet exports). */
+  rfMaxPct: number | null;
+  /** Null when the source file doesn't have RF% (raw-tablet exports). */
+  drf: number | null;
   peakAccelMs2: number;
-  peakPowerW: number;
-  peakPowerRelWkg: number;
+  /** Null when the source file doesn't have a power column (raw-tablet exports). */
+  peakPowerW: number | null;
+  /** Null when the source file doesn't have a power column (raw-tablet exports). */
+  peakPowerRelWkg: number | null;
   vDropoffPct: number;
   totalSteps: number;
   stepFreqHz: number | null;
@@ -94,6 +119,8 @@ export interface StepEventOut {
   stepVelocityMs: number | null;
   stepFrequencyHz: number | null;
   peakForceN: number | null;
+  /** True when derived from velocity oscillation, false when read from Step Table. */
+  derived: boolean;
 }
 
 export interface ChartSample {
@@ -133,8 +160,10 @@ export async function parse1080File(
 
   const warnings: string[] = [];
   let samples: Sample[];
+  // Load values in grams, same index as samples. Sliced alongside samples
+  // when sprint-start detection trims the front of the stream.
+  let loadsG: number[];
   let bodyMassKg: number;
-  let avgLoadKg: number;
   // Only the Dashboard format has rich derived columns (RF%, power, force);
   // we keep a handle on the raw sheet to read them. For raw-tablet we can't.
   let derivedSheet: XLSX.WorkSheet | null = null;
@@ -142,7 +171,9 @@ export async function parse1080File(
   if (format === "dashboard") {
     const rawSheetName = wb.SheetNames.find((n) => n.startsWith("Raw Data"));
     derivedSheet = wb.Sheets[rawSheetName as string];
-    samples = extractSprintSamples(derivedSheet);
+    const extracted = extractDashboardSamples(derivedSheet);
+    samples = extracted.samples;
+    loadsG = extracted.loads;
     const fileBodyMass = pickFirstNumber(derivedSheet, "L");
     bodyMassKg = options?.bodyMassKgOverride ?? fileBodyMass ?? 0;
     if (!bodyMassKg) {
@@ -150,12 +181,11 @@ export async function parse1080File(
         "Dashboard export: could not read body mass from col L and no override provided.",
       );
     }
-    const avgLoadG = meanColumn(derivedSheet, "K", samples.length);
-    avgLoadKg = avgLoadG / 1000;
   } else {
     const firstSheet = wb.Sheets[wb.SheetNames[0]];
     const extracted = extractRawTabletSamples(firstSheet);
     samples = extracted.samples;
+    loadsG = extracted.loads;
     if (options?.bodyMassKgOverride == null || options.bodyMassKgOverride <= 0) {
       throw new Error(
         "Raw tablet export: athlete body mass required (the tablet export " +
@@ -163,9 +193,6 @@ export async function parse1080File(
       );
     }
     bodyMassKg = options.bodyMassKgOverride;
-    avgLoadKg = extracted.loads.length
-      ? extracted.loads.reduce((s, v) => s + v, 0) / extracted.loads.length / 1000
-      : 0;
     warnings.push(
       "Raw tablet export: RF%, DRF and peak power are not available in this " +
         "format (they're post-processed columns added by the 1080 Dashboard " +
@@ -179,6 +206,49 @@ export async function parse1080File(
         `Expected >1000 at 1 kHz sampling.`,
     );
   }
+
+  // ---------- Sprint-start auto-detection ------------------------------
+  // The raw tablet export contains walk-up, sprint, and walk-back in one
+  // continuous stream. The Dashboard export is usually pre-trimmed, but we
+  // run auto-detect on both to be safe — for pre-trimmed data it returns 0
+  // (or very close) so it's a no-op. After detection, we slice the samples
+  // and re-normalize t and x so that sprint-start == (0, 0). Every
+  // downstream metric (splits, τ fit, max-V time) is then sprint-relative
+  // by construction.
+  // Only act on sprint-start detection when the offset is meaningful
+  // (≥0.5 s). Smaller offsets are usually just sensor jitter and the
+  // Dashboard-format data is effectively pre-trimmed — we don't want to
+  // disturb those metrics.
+  const startIdxCandidate = detectSprintStart(samples);
+  const startIdx =
+    startIdxCandidate > 0 && samples[startIdxCandidate].t >= 0.5
+      ? startIdxCandidate
+      : 0;
+  const sprintStartOffsetS = startIdx > 0 ? samples[startIdx].t : 0;
+  if (startIdx > 0) {
+    const t0 = samples[startIdx].t;
+    const x0 = samples[startIdx].x;
+    samples = samples.slice(startIdx).map((s) => ({
+      t: s.t - t0,
+      v: s.v,
+      x: s.x - x0,
+    }));
+    loadsG = loadsG.slice(startIdx);
+    if (samples.length < 100) {
+      throw new Error(
+        `After sprint-start detection the remaining sprint has only ${samples.length} samples. ` +
+          `Source file may not contain a clean sprint.`,
+      );
+    }
+    warnings.push(
+      `Sprint auto-detected starting at +${sprintStartOffsetS.toFixed(2)} s in the source file. ` +
+        `All metrics below are sprint-relative.`,
+    );
+  }
+
+  const avgLoadKg = loadsG.length
+    ? loadsG.reduce((s, v) => s + v, 0) / loadsG.length / 1000
+    : 0;
 
   const maxDistM = Math.max(...samples.map((s) => s.x));
   const durationS = samples[samples.length - 1].t;
@@ -207,9 +277,11 @@ export async function parse1080File(
   // Acceleration & force derivation (F = m*a, horizontal only here since
   // the 1080 raw force already nets out tether and drag contributions).
   const peakAccelMs2 = (maxVms / tau);  // a(0) from the model
-  const peakPowerW = derivedSheet
+  const peakPowerW: number | null = derivedSheet
     ? peakSampleField(derivedSheet, "P", samples.length)
-    : 0;
+    : null;
+  const peakPowerRelWkg: number | null =
+    peakPowerW != null ? peakPowerW / bodyMassKg : null;
 
   // Samozino F0 / V0 / Pmax / slope
   // Use the simple form for an unresisted exponential fit:
@@ -226,9 +298,10 @@ export async function parse1080File(
 
   // RFmax and DRF from the raw RF% column (R) vs speed (H). Only available
   // for Dashboard format — raw tablet exports don't have RF%.
-  const { rfMaxPct, drf } = derivedSheet
-    ? computeRfMetrics(derivedSheet, samples)
-    : { rfMaxPct: 0, drf: 0 };
+  const { rfMaxPct, drf }: { rfMaxPct: number | null; drf: number | null } =
+    derivedSheet
+      ? computeRfMetrics(derivedSheet, samples)
+      : { rfMaxPct: null, drf: null };
 
   // ---------- Splits ----------------------------------------------------
   const split10 = firstSampleAtDist(samples, 10);
@@ -243,8 +316,16 @@ export async function parse1080File(
     samples.slice(windowStart).reduce((s, v) => s + v.v, 0) / (endIdx - windowStart + 1);
   const vDropoffPct = ((maxVms - endV) / maxVms) * 100;
 
-  // ---------- Steps (from 1080 Step Table) -----------------------------
-  const steps = extractStepTable(wb);
+  // ---------- Steps -----------------------------------------------------
+  // Prefer the 1080's own Step Table when present (Dashboard format);
+  // fall back to deriving steps from velocity oscillation for raw-tablet
+  // exports or Dashboard files that omit the Step Table.
+  let steps: StepEventOut[] = extractStepTable(wb);
+  let stepsDerived = false;
+  if (steps.length === 0) {
+    steps = deriveStepsFromVelocity(samples);
+    stepsDerived = true;
+  }
   const stepFreqHz = steps.length
     ? steps
         .map((s) => s.stepFrequencyHz ?? 0)
@@ -307,7 +388,11 @@ export async function parse1080File(
 
   const fvImbalancePct = fvProfileValid ? Math.abs(fvSlope / -0.5) * 100 : null;
 
+  const hasDerivedColumns = derivedSheet != null;
+
   return {
+    format,
+    sprintStartOffsetS,
     bodyMassKg,
     avgLoadKg,
     maxDistM,
@@ -335,7 +420,7 @@ export async function parse1080File(
       drf,
       peakAccelMs2,
       peakPowerW,
-      peakPowerRelWkg: peakPowerW / bodyMassKg,
+      peakPowerRelWkg,
       vDropoffPct,
       totalSteps: steps.length,
       stepFreqHz,
@@ -343,7 +428,9 @@ export async function parse1080File(
       stepLengthStdM,
     } as SprintMetricsOut,
     steps,
+    stepsDerived,
     chartSamples,
+    hasDerivedColumns,
     fvProfileValid,
     classification: { sprintProfile, fvBalance },
     warnings,
@@ -357,27 +444,29 @@ export async function parse1080File(
 interface Sample { t: number; v: number; x: number }
 
 /**
- * Pull samples from Raw Data columns G (time_s), H (speed_m/s), I (distance_m).
- * Stops at the first blank time.
+ * Pull samples from Dashboard-format Raw Data columns G (time_s), H (speed_m/s),
+ * I (distance_m), K (load_g) in parallel. Stops at the first blank time.
  */
-function extractSprintSamples(ws: XLSX.WorkSheet): Sample[] {
-  const out: Sample[] = [];
+function extractDashboardSamples(
+  ws: XLSX.WorkSheet,
+): { samples: Sample[]; loads: number[] } {
+  const samples: Sample[] = [];
+  const loads: number[] = [];
   const range = XLSX.utils.decode_range(ws["!ref"] ?? "A1:A1");
   for (let r = 1; r <= range.e.r; r++) { // 0-indexed, row 2 of sheet
-    const gAddr = XLSX.utils.encode_cell({ c: 6, r });  // G
-    const hAddr = XLSX.utils.encode_cell({ c: 7, r });  // H
-    const iAddr = XLSX.utils.encode_cell({ c: 8, r });  // I
-    const g = ws[gAddr]?.v;
-    const h = ws[hAddr]?.v;
-    const i = ws[iAddr]?.v;
+    const g = ws[XLSX.utils.encode_cell({ c: 6, r })]?.v; // G
+    const h = ws[XLSX.utils.encode_cell({ c: 7, r })]?.v; // H
+    const i = ws[XLSX.utils.encode_cell({ c: 8, r })]?.v; // I
+    const k = ws[XLSX.utils.encode_cell({ c: 10, r })]?.v; // K
     if (g === undefined || g === null || g === "") break;
     const t = Number(g);
     const v = Number(h);
     const x = Number(i);
     if (!Number.isFinite(t) || !Number.isFinite(v) || !Number.isFinite(x)) continue;
-    out.push({ t, v, x });
+    samples.push({ t, v, x });
+    loads.push(typeof k === "number" && Number.isFinite(k) ? k : 0);
   }
-  return out;
+  return { samples, loads };
 }
 
 function pickFirstNumber(ws: XLSX.WorkSheet, col: string): number | null {
@@ -521,6 +610,7 @@ function extractStepTable(wb: XLSX.WorkBook): StepEventOut[] {
         stepVelocityMs: numOrNull(stepVel),
         stepFrequencyHz: numOrNull(stepFreq),
         peakForceN: null,
+        derived: false,
       };
     })
     .filter((s) => Number.isFinite(s.stepNumber) && s.stepNumber > 0);
@@ -604,4 +694,152 @@ function downsample(samples: Sample[], target: number): ChartSample[] {
   for (let i = 0; i < n; i += stride) out.push(samples[i]);
   if (out[out.length - 1] !== samples[n - 1]) out.push(samples[n - 1]);
   return out;
+}
+
+/**
+ * Centered moving average with cumulative-sum implementation (O(n)). The
+ * window is clipped at the boundaries so the output has the same length as
+ * the input. Zero-phase by construction, which is what we need for both
+ * sprint-start detection and step-peak detection.
+ */
+function movingAverage(arr: number[], window: number): number[] {
+  const n = arr.length;
+  if (window <= 1 || n === 0) return arr.slice();
+  const half = Math.floor(window / 2);
+  const cum = new Array<number>(n + 1);
+  cum[0] = 0;
+  for (let i = 0; i < n; i++) cum[i + 1] = cum[i] + arr[i];
+  const out = new Array<number>(n);
+  for (let i = 0; i < n; i++) {
+    const lo = Math.max(0, i - half);
+    const hi = Math.min(n, i + half + 1);
+    out[i] = (cum[hi] - cum[lo]) / (hi - lo);
+  }
+  return out;
+}
+
+/**
+ * Auto-detect the sprint-start sample index.
+ *
+ * Raw tablet exports contain several seconds of walk-up before the actual
+ * sprint begins. We find the first moment the athlete is clearly moving
+ * (smoothed v > 1.5 m/s and the following 500 ms averages > 2.0 m/s) and
+ * then walk backwards to the nearest near-zero velocity — that's the true
+ * sprint start. For Dashboard exports (already pre-trimmed), this returns 0
+ * (or a value within a few samples of 0) because v rises steeply from the
+ * first sample.
+ *
+ * Returns the start sample index; 0 means "start at sample 0 as given".
+ * Approximate 1 kHz sampling is assumed for the 500 ms window size.
+ */
+function detectSprintStart(samples: Sample[]): number {
+  const n = samples.length;
+  if (n < 600) return 0;
+  const v = samples.map((s) => s.v);
+  // ~200 ms smoothing window at 1 kHz — heavy enough to kill sensor noise,
+  // light enough that the leading edge of the sprint isn't flattened.
+  const smoothed = movingAverage(v, 201);
+  const windowAheadSamples = Math.min(500, Math.floor(n / 4));
+  const riseThreshold = 1.5;
+  const sustainedThreshold = 2.0;
+  let trigger = -1;
+  for (let i = 0; i < n - windowAheadSamples; i++) {
+    if (smoothed[i] < riseThreshold) continue;
+    let sum = 0;
+    for (let j = i; j < i + windowAheadSamples; j++) sum += smoothed[j];
+    if (sum / windowAheadSamples > sustainedThreshold) {
+      trigger = i;
+      break;
+    }
+  }
+  if (trigger <= 0) return 0;
+
+  // Walk back while v keeps dropping (toward 0), stopping at the first
+  // local minimum or when v drops below 0.3 m/s.
+  let j = trigger;
+  while (j > 0) {
+    if (smoothed[j - 1] > smoothed[j] + 0.005) break; // v started rising again → this is the trough
+    if (smoothed[j] < 0.3) break;                      // effectively at rest
+    j--;
+  }
+  return j;
+}
+
+/**
+ * Derive step events from velocity oscillation when the 1080 Step Table is
+ * absent (raw-tablet exports). Approach:
+ *   1. Long-window MA (≈500 ms) acts as a high-pass when subtracted from v
+ *      — removes the overall acceleration trend and leaves the step-cadence
+ *      oscillation plus noise.
+ *   2. Short-window MA (≈20 ms) smooths sensor noise out of the residual.
+ *   3. Local minima in the smoothed residual = foot-strike instants
+ *      (during ground contact the tether speed dips).
+ *   4. Enforce minimum spacing (100 ms) and prominence (0.3 × σ(residual))
+ *      so we don't over-detect on jitter.
+ *
+ * This is equivalent in spirit to the scipy-style Butterworth band-pass +
+ * peak-find, traded for zero external deps. Accurate enough to count steps
+ * and compute mean length/frequency; not suitable for GCT (which still
+ * needs an external sensor).
+ *
+ * `sensor_source` stays "1080_sprint" but each step carries `derived: true`
+ * so the UI can flag the provenance.
+ */
+function deriveStepsFromVelocity(samples: Sample[]): StepEventOut[] {
+  const n = samples.length;
+  if (n < 300) return [];
+  const v = samples.map((s) => s.v);
+
+  const longMA = movingAverage(v, 501);
+  const residualRaw = new Array<number>(n);
+  for (let i = 0; i < n; i++) residualRaw[i] = v[i] - longMA[i];
+  const residual = movingAverage(residualRaw, 21);
+
+  // Standard deviation of the band-passed signal (no mean — it's near 0).
+  let sq = 0;
+  for (let i = 0; i < n; i++) sq += residual[i] * residual[i];
+  const sigma = Math.sqrt(sq / n);
+  const minProminence = 0.3 * sigma;
+  const minSeparation = 100; // ≈ 100 ms at 1 kHz → caps cadence at 10 Hz
+
+  // Only search for steps in the sprint's active phase — ignore the last
+  // 5% of samples where the athlete is decelerating past the finish line.
+  const searchEnd = Math.floor(n * 0.95);
+
+  const minima: number[] = [];
+  let lastMinIdx = -Infinity;
+  for (let i = 1; i < searchEnd - 1; i++) {
+    if (residual[i] >= residual[i - 1] || residual[i] >= residual[i + 1]) continue;
+    if (i - lastMinIdx < minSeparation) continue;
+
+    // Prominence: look at local max within ±100 samples on each side.
+    const lo = Math.max(0, i - 100);
+    const hi = Math.min(n, i + 100);
+    let localMax = -Infinity;
+    for (let k = lo; k < hi; k++) if (residual[k] > localMax) localMax = residual[k];
+    if (localMax - residual[i] < minProminence) continue;
+
+    minima.push(i);
+    lastMinIdx = i;
+  }
+
+  const steps: StepEventOut[] = [];
+  for (let k = 0; k < minima.length - 1; k++) {
+    const i1 = minima[k];
+    const i2 = minima[k + 1];
+    const t1 = samples[i1].t;
+    const t2 = samples[i2].t;
+    const period = t2 - t1;
+    if (period <= 0) continue;
+    steps.push({
+      stepNumber: k + 1,
+      tStrikeS: t1,
+      stepLengthM: samples[i2].x - samples[i1].x,
+      stepVelocityMs: (samples[i2].x - samples[i1].x) / period,
+      stepFrequencyHz: 1 / period,
+      peakForceN: null,
+      derived: true,
+    });
+  }
+  return steps;
 }

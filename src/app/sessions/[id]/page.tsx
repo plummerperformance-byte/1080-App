@@ -171,6 +171,12 @@ export default function SessionPage({ params }: { params: { id: string } }) {
               ? `${sprint.load_kg.toFixed(2)} kg avg load`
               : ""}
           </div>
+          {sprint.sprint_start_offset_s != null && sprint.sprint_start_offset_s > 0 ? (
+            <div className="mt-2 inline-block rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-800">
+              Sprint auto-detected at +{sprint.sprint_start_offset_s.toFixed(2)} s
+              in the source file — metrics are sprint-relative.
+            </div>
+          ) : null}
         </div>
         <div
           className={`rounded-md border px-3 py-2 text-xs ${
@@ -308,9 +314,20 @@ export default function SessionPage({ params }: { params: { id: string } }) {
         </div>
 
         <div className="rounded-lg border border-gray-200 bg-white p-6">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-ppa-muted">
-            Step table ({steps.length})
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-ppa-muted">
+              Step table ({steps.length})
+            </h2>
+            {sprint.steps_derived === true ? (
+              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-800">
+                Derived from velocity
+              </span>
+            ) : steps.length > 0 ? (
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-ppa-muted">
+                From 1080 Step Table
+              </span>
+            ) : null}
+          </div>
           <div className="mt-4 overflow-y-auto" style={{ maxHeight: 480 }}>
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-white text-left text-xs uppercase tracking-wide text-ppa-muted">

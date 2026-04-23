@@ -75,6 +75,8 @@ export type Sprint = {
   distance_reached_m: number | null;
   duration_s: number | null;
   notes: string | null;
+  sprint_start_offset_s: number | null;
+  steps_derived: boolean | null;
   created_at: string;
 };
 

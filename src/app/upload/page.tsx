@@ -217,6 +217,14 @@ export default function UploadPage() {
           <div className="mt-1">{parseError}</div>
         </div>
       ) : parsed && m ? (
+        <div className="space-y-4">
+        {parsed.sprintStartOffsetS > 0 ? (
+          <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
+            Sprint auto-detected starting at <strong>+{parsed.sprintStartOffsetS.toFixed(2)} s</strong>{" "}
+            in the source file ({parsed.format === "raw_tablet" ? "raw tablet export" : "dashboard export"}).
+            Metrics below are sprint-relative.
+          </div>
+        ) : null}
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="rounded-lg border border-gray-200 bg-white p-6">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-ppa-muted">
@@ -251,15 +259,43 @@ export default function UploadPage() {
                 sub={fmt(m.pmaxW, 0, " W total")}
               />
               <Row label="τ" value={fmt(m.tau, 3)} />
-              <Row label="RFmax" value={fmt(m.rfMaxPct, 2, " %")} />
-              <Row label="DRF" value={fmt(m.drf, 3)} />
+              <Row
+                label="RFmax"
+                value={fmt(m.rfMaxPct, 2, " %")}
+                sub={!parsed.hasDerivedColumns ? "Not in raw export" : undefined}
+              />
+              <Row
+                label="DRF"
+                value={fmt(m.drf, 3)}
+                sub={!parsed.hasDerivedColumns ? "Not in raw export" : undefined}
+              />
+              <Row
+                label="Peak power"
+                value={fmt(m.peakPowerRelWkg, 2, " W/kg")}
+                sub={
+                  !parsed.hasDerivedColumns
+                    ? "Not in raw export"
+                    : fmt(m.peakPowerW, 0, " W total")
+                }
+              />
             </div>
           </div>
 
           <div className="rounded-lg border border-gray-200 bg-white p-6">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-ppa-muted">
-              Splits & steps
-            </h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-ppa-muted">
+                Splits & steps
+              </h2>
+              {parsed.stepsDerived ? (
+                <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-800">
+                  Steps derived from velocity
+                </span>
+              ) : m.totalSteps > 0 ? (
+                <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-ppa-muted">
+                  Steps from 1080 Step Table
+                </span>
+              ) : null}
+            </div>
             <div className="mt-4 space-y-0">
               <Row label="10 m" value={fmt(m.split10mS, 3, " s")} />
               <Row label="20 m" value={fmt(m.split20mS, 3, " s")} />
@@ -299,6 +335,7 @@ export default function UploadPage() {
               </div>
             ) : null}
           </div>
+        </div>
         </div>
       ) : null}
 

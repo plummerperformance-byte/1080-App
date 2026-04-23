@@ -53,6 +53,8 @@ export async function saveSprintSession(
       load_pct_bm: loadPctBm,
       distance_reached_m: parsed.maxDistM,
       duration_s: parsed.durationS,
+      sprint_start_offset_s: parsed.sprintStartOffsetS > 0 ? parsed.sprintStartOffsetS : null,
+      steps_derived: parsed.stepsDerived,
     })
     .select("id")
     .single();

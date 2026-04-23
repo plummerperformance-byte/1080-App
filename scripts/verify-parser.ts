@@ -13,18 +13,25 @@ import { parse1080File, type ParsedSprint } from "../src/lib/parser/1080-parser"
 const SAMPLES: Array<{
   label: string;
   file: string;
+  bodyMassKgOverride?: number;
   expected: Partial<{
+    format: "dashboard" | "raw_tablet";
+    sprintStartOffsetS: number;
     maxVms: number;
     avgLoadKg: number;
     split10mS: number;
+    split20mS: number;
     split40mS: number;
     f0RelNkg: number;
     v0Ms: number;
     pmaxRelWkg: number;
     totalSteps: number;
     stepFreqHz: number;
+    avgStepLengthM: number;
     fvProfileValid: boolean;
     splitsBeyondReach: boolean;
+    stepsDerived: boolean;
+    hasDerivedColumns: boolean;
   }>;
 }> = [
   {
@@ -46,9 +53,32 @@ const SAMPLES: Array<{
     label: "sample_kai.xlsx",
     file: "handoff/reference/sample_kai.xlsx",
     expected: {
+      format: "dashboard",
       maxVms: 6.36,
       avgLoadKg: 17.28,
       fvProfileValid: false,
+      splitsBeyondReach: true,
+      stepsDerived: false,
+      hasDerivedColumns: true,
+    },
+  },
+  {
+    label: "sample_notty_raw.xlsx",
+    file: "handoff/reference/sample_notty_raw.xlsx",
+    bodyMassKgOverride: 94,
+    expected: {
+      format: "raw_tablet",
+      sprintStartOffsetS: 6.77,
+      maxVms: 9.61,
+      split10mS: 2.17,
+      split20mS: 3.59,
+      f0RelNkg: 5.25,
+      pmaxRelWkg: 12.62,
+      totalSteps: 20,
+      stepFreqHz: 4.29,
+      avgStepLengthM: 1.43,
+      stepsDerived: true,
+      hasDerivedColumns: false,
       splitsBeyondReach: true,
     },
   },
@@ -76,7 +106,9 @@ async function run(): Promise<void> {
     const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
     let parsed: ParsedSprint;
     try {
-      parsed = await parse1080File(ab);
+      parsed = await parse1080File(ab, {
+        bodyMassKgOverride: s.bodyMassKgOverride,
+      });
     } catch (err) {
       console.log(`\n=== ${s.label} — PARSE ERROR ===`);
       console.log(err instanceof Error ? err.message : String(err));
@@ -86,6 +118,16 @@ async function run(): Promise<void> {
     const m = parsed.metrics;
     const e = s.expected;
     console.log(`\n=== ${s.label} ===`);
+    console.log(
+      `  format:           ${parsed.format}` +
+        (e.format ? `   expected ${e.format}  [${parsed.format === e.format ? "OK" : "FAIL"}]` : ""),
+    );
+    console.log(
+      `  sprintStartOffset:${fmt(parsed.sprintStartOffsetS, 2)} s` +
+        (e.sprintStartOffsetS != null
+          ? `   expected ≈ ${e.sprintStartOffsetS}  [${near(parsed.sprintStartOffsetS, e.sprintStartOffsetS, 0.3)}]`
+          : ""),
+    );
     console.log(`  bodyMassKg:       ${fmt(parsed.bodyMassKg, 1)}`);
     console.log(
       `  avgLoadKg:        ${fmt(parsed.avgLoadKg, 2)}` +
@@ -141,8 +183,25 @@ async function run(): Promise<void> {
       `  stepFreqHz:       ${fmt(m.stepFreqHz, 2)}` +
         (e.stepFreqHz != null ? `   expected ≈ ${e.stepFreqHz}  [${near(m.stepFreqHz, e.stepFreqHz, 0.5)}]` : ""),
     );
-    console.log(`  avgStepLengthM:   ${fmt(m.avgStepLengthM, 2)}`);
+    console.log(
+      `  avgStepLengthM:   ${fmt(m.avgStepLengthM, 2)}` +
+        (e.avgStepLengthM != null
+          ? `   expected ≈ ${e.avgStepLengthM}  [${near(m.avgStepLengthM, e.avgStepLengthM, 0.2)}]`
+          : ""),
+    );
     console.log(`  stepLengthStdM:   ${fmt(m.stepLengthStdM, 3)}`);
+    console.log(
+      `  stepsDerived:     ${parsed.stepsDerived}` +
+        (e.stepsDerived != null
+          ? `   expected ${e.stepsDerived}  [${parsed.stepsDerived === e.stepsDerived ? "OK" : "FAIL"}]`
+          : ""),
+    );
+    console.log(
+      `  hasDerivedCols:   ${parsed.hasDerivedColumns}` +
+        (e.hasDerivedColumns != null
+          ? `   expected ${e.hasDerivedColumns}  [${parsed.hasDerivedColumns === e.hasDerivedColumns ? "OK" : "FAIL"}]`
+          : ""),
+    );
     console.log(
       `  fvProfileValid:   ${parsed.fvProfileValid}` +
         (e.fvProfileValid != null
