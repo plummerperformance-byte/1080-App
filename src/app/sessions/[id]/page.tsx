@@ -153,9 +153,13 @@ export default function SessionPage({ params }: { params: { id: string } }) {
 
   // Velocity-over-position line: stored downsampled samples from the parser.
   const vxSamples = (metrics.chart_samples ?? []).map((s) => ({ x: s.x, v: s.v }));
-  const maxX = vxSamples.length
+  const hasChartSamples = vxSamples.length > 0;
+  const maxX = hasChartSamples
     ? Math.max(...vxSamples.map((s) => s.x))
     : sprint.distance_reached_m ?? 40;
+  const yMax = hasChartSamples
+    ? Math.max(...vxSamples.map((s) => s.v))
+    : metrics.max_v_ms ?? 10;
 
   // Step markers: position at foot-strike for each step. Derive from running
   // sum of step_length_m (some rows may have null lengths — skip those).
@@ -269,6 +273,13 @@ export default function SessionPage({ params }: { params: { id: string } }) {
           Shaded bands: 0–10 m acceleration · 10+ m max-velocity. Dots on the
           x-axis = foot-strikes.
         </div>
+        {!hasChartSamples ? (
+          <div className="mt-4 rounded-md border border-yellow-200 bg-yellow-50 p-3 text-xs text-yellow-900">
+            Velocity trace not available for this session — it was saved before
+            chart-samples persistence was added. Re-upload the same xlsx to
+            repopulate (the other metrics won't change).
+          </div>
+        ) : null}
         <div className="mt-4 h-72 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart margin={{ top: 10, right: 20, bottom: 20, left: 10 }}>
@@ -282,7 +293,7 @@ export default function SessionPage({ params }: { params: { id: string } }) {
               />
               <YAxis
                 type="number"
-                domain={[0, "auto"]}
+                domain={[0, Math.ceil(yMax + 1)]}
                 label={{ value: "Speed (m/s)", angle: -90, position: "insideLeft" }}
               />
               <Tooltip
