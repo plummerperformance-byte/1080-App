@@ -149,10 +149,12 @@ export async function parse1080File(file: File | ArrayBuffer): Promise<ParsedSpr
   const distTo90PctVM = i90 >= 0 ? samples[i90].x : 0;
 
   // ---------- Samozino exponential fit ---------------------------------
-  // v(t) = Vmax * (1 - exp(-t/τ))  — fit τ by least squares to all samples
-  // (Vmax = measured max V, we refine τ only — this mirrors the original
-  // 1080 Excel template's Solver-adjusted approach.)
-  const fit = fitExponential(samples, maxVms);
+  // v(t) = Vmax * (1 - exp(-t/τ))  — fit τ by least squares to the
+  // acceleration phase only (t ≤ timeToMaxV). Including the post-MaxV
+  // plateau + deceleration tail biases τ upward and under-estimates F0/Pmax.
+  // This matches the 1080 Excel template's Solver range and standard
+  // Samozino practice.
+  const fit = fitExponential(samples, maxVms, timeToMaxVS);
   const tau = fit.tau;
 
   // Acceleration & force derivation (F = m*a, horizontal only here since
@@ -213,10 +215,10 @@ export async function parse1080File(file: File | ArrayBuffer): Promise<ParsedSpr
 
   // ---------- Validity & classification --------------------------------
   const warnings: string[] = [];
-  const fvProfileValid = avgLoadKg <= bodyMassKg * 0.05; // <5% BM counts as "unresisted"
+  const fvProfileValid = avgLoadKg <= bodyMassKg * 0.10; // ≤10% BM counts as "essentially unresisted" (Samozino practice)
   if (!fvProfileValid) {
     warnings.push(
-      `Avg load ${avgLoadKg.toFixed(1)} kg (>5% BM) — F-V profile is NOT a true ` +
+      `Avg load ${avgLoadKg.toFixed(1)} kg (>10% BM) — F-V profile is NOT a true ` +
         `Samozino profile. Treat F0/V0/Pmax as resisted-sprint descriptors only.`,
     );
   }
@@ -358,13 +360,22 @@ function peakSampleField(ws: XLSX.WorkSheet, col: string, n: number): number {
 }
 
 /**
- * Fit v(t) = Vmax * (1 - exp(-t/τ)) to the samples by grid-then-golden-section
- * search on τ ∈ [0.1, 3.0]. Fast and stable for typical sprint data.
+ * Fit v(t) = Vmax * (1 - exp(-t/τ)) to the acceleration phase only
+ * (samples where t ≤ tMax) by grid-then-golden-section search on
+ * τ ∈ [0.1, 3.0]. Fast and stable for typical sprint data.
+ *
+ * Fitting only the accel phase avoids the plateau/deceleration tail biasing
+ * τ upward; this matches the 1080 Excel template's Solver range.
  */
-function fitExponential(samples: Sample[], vmax: number): { tau: number; rss: number } {
+function fitExponential(
+  samples: Sample[],
+  vmax: number,
+  tMax: number,
+): { tau: number; rss: number } {
+  const accelSamples = samples.filter((s) => s.t <= tMax);
   const rss = (tau: number) => {
     let s = 0;
-    for (const { t, v } of samples) {
+    for (const { t, v } of accelSamples) {
       const pred = vmax * (1 - Math.exp(-t / tau));
       s += (v - pred) ** 2;
     }
