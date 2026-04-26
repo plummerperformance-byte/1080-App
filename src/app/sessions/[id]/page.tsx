@@ -4,6 +4,8 @@ import { supabaseServer } from "@/lib/supabase/server";
 import { Card, Metric, Pill, RankCard } from "@/components/ui";
 import DeleteButton from "@/components/DeleteButton";
 import AddVideoToSprint from "@/components/AddVideoToSprint";
+import { checkSetup } from "@/lib/setup-status";
+import SetupScreen from "@/components/SetupScreen";
 import { rankValue, selectNorm, type Rank } from "@/lib/norms";
 import type { Norm } from "@/types/database";
 import SyncedSessionView from "./SyncedSessionView";
@@ -12,6 +14,9 @@ import SplitsChart from "./SplitsChart";
 export const dynamic = "force-dynamic";
 
 export default async function SessionPage({ params }: { params: { id: string } }) {
+  const setup = await checkSetup();
+  if (!setup.ok) return <SetupScreen status={setup} />;
+
   const sb = supabaseServer();
   const { data: session } = await sb
     .from("sessions")

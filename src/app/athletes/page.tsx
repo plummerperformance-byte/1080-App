@@ -2,11 +2,16 @@ import Link from "next/link";
 import { supabaseServer } from "@/lib/supabase/server";
 import { Card } from "@/components/ui";
 import DeleteButton from "@/components/DeleteButton";
+import { checkSetup } from "@/lib/setup-status";
+import SetupScreen from "@/components/SetupScreen";
 import AthleteForm from "./AthleteForm";
 
 export const dynamic = "force-dynamic";
 
 export default async function AthletesPage() {
+  const setup = await checkSetup();
+  if (!setup.ok) return <SetupScreen status={setup} />;
+
   const sb = supabaseServer();
   const { data: athletes } = await sb
     .from("athletes")

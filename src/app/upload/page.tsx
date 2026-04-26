@@ -1,4 +1,6 @@
 import { supabaseServer } from "@/lib/supabase/server";
+import { checkSetup } from "@/lib/setup-status";
+import SetupScreen from "@/components/SetupScreen";
 import UploadFlow from "./UploadFlow";
 
 export const dynamic = "force-dynamic";
@@ -8,6 +10,9 @@ export default async function UploadPage({
 }: {
   searchParams: { athlete?: string; session?: string };
 }) {
+  const setup = await checkSetup();
+  if (!setup.ok) return <SetupScreen status={setup} />;
+
   const sb = supabaseServer();
   const [{ data: athletes }, sessionResult] = await Promise.all([
     sb

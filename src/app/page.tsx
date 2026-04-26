@@ -1,10 +1,15 @@
 import Link from "next/link";
 import { supabaseServer } from "@/lib/supabase/server";
 import { Card, Pill } from "@/components/ui";
+import { checkSetup } from "@/lib/setup-status";
+import SetupScreen from "@/components/SetupScreen";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
+  const setup = await checkSetup();
+  if (!setup.ok) return <SetupScreen status={setup} />;
+
   const sb = supabaseServer();
   const { data: recent } = await sb
     .from("v_session_summaries")

@@ -3,12 +3,17 @@ import { notFound } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import { Card } from "@/components/ui";
 import DeleteButton from "@/components/DeleteButton";
+import { checkSetup } from "@/lib/setup-status";
+import SetupScreen from "@/components/SetupScreen";
 import EditableHeader from "./EditableHeader";
 import TrendCharts from "./TrendCharts";
 
 export const dynamic = "force-dynamic";
 
 export default async function AthleteDetailPage({ params }: { params: { id: string } }) {
+  const setup = await checkSetup();
+  if (!setup.ok) return <SetupScreen status={setup} />;
+
   const sb = supabaseServer();
   const { data: athlete } = await sb
     .from("athletes")
