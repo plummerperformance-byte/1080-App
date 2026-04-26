@@ -4,10 +4,10 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useDropzone } from "react-dropzone";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { parse1080File, type ParsedSprint } from "@/lib/parser-1080";
+import { parse1080File, ParserError, type ParsedSprint } from "@/lib/parser-1080";
 import { analyseSprintVideo } from "@/lib/pose/analyser";
 import type { PoseAnalysisResult } from "@/lib/pose/types";
-import { Button, Card, Field, Pill, Select } from "@/components/ui";
+import { Button, Card, Field, Pill, Select, TextInput } from "@/components/ui";
 
 type AthleteLite = {
   id: string;
@@ -22,9 +22,17 @@ type AthleteLite = {
 export default function UploadFlow({
   athletes,
   defaultAthleteId,
+  existingSession,
 }: {
   athletes: AthleteLite[];
   defaultAthleteId: string | null;
+  existingSession?: {
+    id: string;
+    athleteId: string;
+    date: string;
+    bodyMassKg: number | null;
+    athleteName?: string;
+  } | null;
 }) {
   const router = useRouter();
   const [athleteId, setAthleteId] = useState<string>(
@@ -39,6 +47,12 @@ export default function UploadFlow({
   const [analysing, setAnalysing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [parseHint, setParseHint] = useState<string | null>(null);
+  const [bodyMassOverride, setBodyMassOverride] = useState<string>("");
+  const [sessionDate, setSessionDate] = useState<string>(
+    new Date().toISOString().slice(0, 10),
+  );
+  const [sessionNotes, setSessionNotes] = useState<string>("");
 
   const xlsxDz = useDropzone({
     accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] },
@@ -49,12 +63,19 @@ export default function UploadFlow({
       setXlsxFile(f);
       setParsed(null);
       setError(null);
+      setParseHint(null);
       setParsing(true);
       try {
         const result = await parse1080File(f);
         setParsed(result);
+        setBodyMassOverride(result.bodyMassKg.toString());
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        if (err instanceof ParserError) {
+          setError(err.message);
+          setParseHint(err.hint);
+        } else {
+          setError(err instanceof Error ? err.message : String(err));
+        }
       } finally {
         setParsing(false);
       }
@@ -96,19 +117,47 @@ export default function UploadFlow({
     setError(null);
     const sb = supabaseBrowser();
     try {
+      const effectiveBodyMass =
+        bodyMassOverride && Number.isFinite(Number(bodyMassOverride))
+          ? Number(bodyMassOverride)
+          : parsed.bodyMassKg;
+
       // 1. Sessions row
-      const today = new Date().toISOString().slice(0, 10);
-      const { data: session, error: sessionErr } = await sb
-        .from("sessions")
-        .insert({
-          athlete_id: athleteId,
-          session_date: today,
-          body_mass_kg: parsed.bodyMassKg,
-          notes: pose ? "Includes side-on technique video." : null,
-        })
-        .select()
-        .single();
-      if (sessionErr || !session) throw new Error(sessionErr?.message ?? "Failed to create session.");
+      const noteParts: string[] = [];
+      if (sessionNotes.trim()) noteParts.push(sessionNotes.trim());
+      if (pose) noteParts.push("Includes side-on technique video.");
+      if (Math.abs(effectiveBodyMass - parsed.bodyMassKg) > 0.05) {
+        noteParts.push(
+          `Body mass override: ${effectiveBodyMass} kg (xlsx had ${parsed.bodyMassKg} kg).`,
+        );
+      }
+
+      let session: { id: string };
+      let sprintNumber = 1;
+      if (existingSession) {
+        session = { id: existingSession.id };
+        const { data: existingSprints } = await sb
+          .from("sprints")
+          .select("sprint_number")
+          .eq("session_id", existingSession.id)
+          .order("sprint_number", { ascending: false })
+          .limit(1);
+        sprintNumber = ((existingSprints?.[0]?.sprint_number as number | undefined) ?? 0) + 1;
+      } else {
+        const { data: newSession, error: sessionErr } = await sb
+          .from("sessions")
+          .insert({
+            athlete_id: athleteId,
+            session_date: sessionDate,
+            body_mass_kg: effectiveBodyMass,
+            notes: noteParts.length ? noteParts.join(" ") : null,
+          })
+          .select()
+          .single();
+        if (sessionErr || !newSession)
+          throw new Error(sessionErr?.message ?? "Failed to create session.");
+        session = newSession;
+      }
 
       // 2. Sprints row
       const testType =
@@ -117,7 +166,7 @@ export default function UploadFlow({
         .from("sprints")
         .insert({
           session_id: session.id,
-          sprint_number: 1,
+          sprint_number: sprintNumber,
           test_type: testType,
           sensor_source: "1080_sprint",
           load_kg: parsed.avgLoadKg,
@@ -144,10 +193,10 @@ export default function UploadFlow({
         split_30m_s: m.split30mS,
         split_40m_s: m.split40mS,
         tau: m.tau,
-        f0_n: m.f0N,
+        f0_n: m.f0RelNkg * effectiveBodyMass,
         f0_rel_nkg: m.f0RelNkg,
         v0_ms: m.v0Ms,
-        pmax_w: m.pmaxW,
+        pmax_w: m.pmaxRelWkg * effectiveBodyMass,
         pmax_rel_wkg: m.pmaxRelWkg,
         fv_slope: m.fvSlope,
         fv_imbalance_pct: m.fvImbalancePct,
@@ -155,7 +204,7 @@ export default function UploadFlow({
         drf: m.drf,
         peak_accel_ms2: m.peakAccelMs2,
         peak_power_w: m.peakPowerW,
-        peak_power_rel_wkg: m.peakPowerRelWkg,
+        peak_power_rel_wkg: m.peakPowerW / effectiveBodyMass,
         v_dropoff_pct: m.vDropoffPct,
         total_steps: m.totalSteps,
         step_freq_hz: m.stepFreqHz,
@@ -302,6 +351,7 @@ export default function UploadFlow({
               <Select
                 value={athleteId}
                 onChange={(e) => setAthleteId(e.target.value)}
+                disabled={!!existingSession}
               >
                 {athletes.map((a) => (
                   <option key={a.id} value={a.id}>
@@ -313,6 +363,7 @@ export default function UploadFlow({
             {athlete?.body_mass_kg ? (
               <Pill>{athlete.body_mass_kg} kg</Pill>
             ) : null}
+            {existingSession ? <Pill tone="good">Appending sprint to existing session</Pill> : null}
           </div>
         )}
       </Card>
@@ -335,10 +386,54 @@ export default function UploadFlow({
           )}
         </div>
         {parsing ? <p className="mt-2 text-sm text-ppa-muted">Parsing…</p> : null}
+        {error && !parsed ? (
+          <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+            <div className="font-medium">Couldn't parse this file.</div>
+            <div className="mt-0.5 text-red-700">{error}</div>
+            {parseHint ? <div className="mt-1 text-xs text-red-600">{parseHint}</div> : null}
+          </div>
+        ) : null}
         {parsed ? <ParsedPreview parsed={parsed} /> : null}
       </Card>
 
-      <Card title="3. Side-on sprint video (optional)">
+      {parsed ? (
+        <Card title={existingSession ? "3. Sprint details" : "3. Session details"}>
+          <div className="grid gap-3 md:grid-cols-3">
+            {!existingSession ? (
+              <Field label="Session date">
+                <input
+                  type="date"
+                  value={sessionDate}
+                  onChange={(e) => setSessionDate(e.target.value)}
+                  className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-ppa-accent focus:outline-none focus:ring-1 focus:ring-ppa-accent"
+                />
+              </Field>
+            ) : null}
+            <Field
+              label="Body mass override (kg)"
+              hint={`xlsx says ${parsed.bodyMassKg} kg — change here to recalc F₀ / Pmax for this sprint.`}
+            >
+              <TextInput
+                type="number"
+                step="0.1"
+                value={bodyMassOverride}
+                onChange={(e) => setBodyMassOverride(e.target.value)}
+              />
+            </Field>
+            <Field label={existingSession ? "Sprint notes (optional)" : "Notes"}>
+              <TextInput
+                value={sessionNotes}
+                onChange={(e) => setSessionNotes(e.target.value)}
+                placeholder={
+                  existingSession ? "e.g. heavier load, second attempt" : "e.g. light tail wind, post-warmup"
+                }
+              />
+            </Field>
+          </div>
+        </Card>
+      ) : null}
+
+      <Card title="4. Side-on sprint video (optional)">
         <p className="mb-3 text-xs text-ppa-muted">
           Phase 2: side-on video → MediaPipe Pose → joint angles, foot strike / toe off, contact /
           flight time. Runs in your browser, video file ≤ 50 MB ideal.
@@ -349,14 +444,16 @@ export default function UploadFlow({
             videoDz.isDragActive ? "border-ppa-accent bg-red-50" : "border-gray-300"
           }`}
         >
-          <input {...videoDz.getInputProps()} />
+          <input {...videoDz.getInputProps({ capture: "environment" })} />
           {videoFile ? (
             <p className="text-sm">
               <span className="font-medium">{videoFile.name}</span>{" "}
               <span className="text-ppa-muted">— drop a different file to replace</span>
             </p>
           ) : (
-            <p className="text-sm text-ppa-muted">Drop a side-on .mp4 / .mov here.</p>
+            <p className="text-sm text-ppa-muted">
+              Drop / tap to choose a side-on .mp4 / .mov (camera opens directly on phone).
+            </p>
           )}
         </div>
         {videoFile ? (
@@ -375,8 +472,8 @@ export default function UploadFlow({
         {pose ? <PosePreview pose={pose} /> : null}
       </Card>
 
-      <Card title="4. Save">
-        {error ? <p className="mb-2 text-sm text-ppa-accent">{error}</p> : null}
+      <Card title="5. Save">
+        {error && parsed ? <p className="mb-2 text-sm text-ppa-accent">{error}</p> : null}
         <Button onClick={handleSave} disabled={!parsed || !athleteId || saving}>
           {saving ? "Saving…" : pose ? "Save session + video" : "Save session"}
         </Button>

@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
 import { Card, Metric, Pill, RankCard } from "@/components/ui";
+import DeleteButton from "@/components/DeleteButton";
+import AddVideoToSprint from "@/components/AddVideoToSprint";
 import { rankValue, selectNorm, type Rank } from "@/lib/norms";
 import type { Norm } from "@/types/database";
 import SyncedSessionView from "./SyncedSessionView";
@@ -31,13 +33,27 @@ export default async function SessionPage({ params }: { params: { id: string } }
   const { data: metrics } = sprintIds.length
     ? await sb.from("sprint_metrics").select("*").in("sprint_id", sprintIds)
     : { data: [] };
-  const m = (metrics ?? [])[0] ?? null;
+  const allMetrics = metrics ?? [];
 
-  const { data: stepsRaw } = sprintIds.length
+  // Pick the fastest sprint as the "primary" focus of the page.
+  const primaryMetric =
+    allMetrics.reduce<typeof allMetrics[number] | null>((best, mr) => {
+      if (!best) return mr;
+      const bv = best.max_v_ms ?? -Infinity;
+      const cv = mr.max_v_ms ?? -Infinity;
+      return cv > bv ? mr : best;
+    }, null) ?? null;
+  const sprint =
+    (primaryMetric ? sprints.find((s) => s.id === primaryMetric.sprint_id) : null) ??
+    sprints[0] ??
+    null;
+  const m = primaryMetric ?? null;
+
+  const { data: stepsRaw } = sprint
     ? await sb
         .from("step_events")
         .select("*")
-        .in("sprint_id", sprintIds)
+        .eq("sprint_id", sprint.id)
         .order("step_number", { ascending: true })
     : { data: [] };
   const steps = stepsRaw ?? [];
@@ -51,8 +67,6 @@ export default async function SessionPage({ params }: { params: { id: string } }
   };
   const rank = (metricName: string, value: number | null | undefined): Rank =>
     rankValue(value, selectNorm(norms ?? [], metricName, ctx));
-
-  const sprint = sprints[0] ?? null;
   const { data: videoRaw } = sprint
     ? await sb
         .from("sprint_videos")
@@ -106,14 +120,31 @@ export default async function SessionPage({ params }: { params: { id: string } }
             <Pill>{athlete.position_group}</Pill>
             {session.body_mass_kg ? <Pill>{session.body_mass_kg} kg</Pill> : null}
             {sprint ? <Pill>{sprint.test_type}</Pill> : null}
+            <Pill>
+              {sprints.length} sprint{sprints.length === 1 ? "" : "s"}
+            </Pill>
           </div>
         </div>
-        <Link
-          href={`/athletes/${athlete.id}`}
-          className="text-sm text-ppa-accent hover:underline"
-        >
-          ← Back to {athlete.full_name}
-        </Link>
+        <div className="flex items-center gap-4">
+          <Link
+            href={`/athletes/${athlete.id}`}
+            className="text-sm text-ppa-accent hover:underline"
+          >
+            ← Back to {athlete.full_name}
+          </Link>
+          <Link
+            href={`/upload?session=${session.id}`}
+            className="rounded-md bg-ppa-navy px-3 py-1.5 text-sm font-medium text-white hover:bg-black"
+          >
+            + Add sprint
+          </Link>
+          <DeleteButton
+            table="sessions"
+            id={session.id}
+            label={`session on ${session.session_date}`}
+            redirectTo={`/athletes/${athlete.id}`}
+          />
+        </div>
       </div>
 
       <section className="grid gap-3 md:grid-cols-3 lg:grid-cols-5">
@@ -127,8 +158,74 @@ export default async function SessionPage({ params }: { params: { id: string } }
       <Card title="Headline">
         <p className="text-sm text-ppa-navy">
           {buildVerdict(m, technique.length > 0)}
+          {sprints.length > 1 ? (
+            <span className="ml-1 text-ppa-muted">
+              Best of {sprints.length} sprints — see the table below for the others.
+            </span>
+          ) : null}
         </p>
       </Card>
+
+      {sprints.length > 1 ? (
+        <Card title="All sprints in this session">
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs uppercase tracking-wide text-ppa-muted">
+              <tr>
+                <th className="py-2 pr-4">#</th>
+                <th className="py-2 pr-4">Test type</th>
+                <th className="py-2 pr-4">Load</th>
+                <th className="py-2 pr-4">Max V</th>
+                <th className="py-2 pr-4">10m</th>
+                <th className="py-2 pr-4">40m</th>
+                <th className="py-2 pr-4">Distance</th>
+                <th className="py-2 pr-4"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {sprints.map((sp) => {
+                const mr = allMetrics.find((x) => x.sprint_id === sp.id);
+                const isPrimary = sp.id === sprint?.id;
+                return (
+                  <tr
+                    key={sp.id}
+                    className={`border-t border-gray-100 ${isPrimary ? "bg-yellow-50" : ""}`}
+                  >
+                    <td className="py-2 pr-4 tabular">
+                      {sp.sprint_number}
+                      {isPrimary ? <span className="ml-1 text-xs text-ppa-muted">(best)</span> : null}
+                    </td>
+                    <td className="py-2 pr-4 text-ppa-muted">{sp.test_type}</td>
+                    <td className="py-2 pr-4 tabular">
+                      {sp.load_kg != null ? `${sp.load_kg.toFixed(1)} kg` : "—"}
+                    </td>
+                    <td className="py-2 pr-4 tabular">
+                      {mr?.max_v_ms != null ? mr.max_v_ms.toFixed(2) : "—"}
+                    </td>
+                    <td className="py-2 pr-4 tabular">
+                      {mr?.split_10m_s != null ? mr.split_10m_s.toFixed(2) : "—"}
+                    </td>
+                    <td className="py-2 pr-4 tabular">
+                      {mr?.split_40m_s != null ? mr.split_40m_s.toFixed(2) : "—"}
+                    </td>
+                    <td className="py-2 pr-4 tabular">
+                      {sp.distance_reached_m != null
+                        ? `${sp.distance_reached_m.toFixed(1)} m`
+                        : "—"}
+                    </td>
+                    <td className="py-2 pr-4">
+                      <DeleteButton
+                        table="sprints"
+                        id={sp.id}
+                        label={`sprint #${sp.sprint_number}`}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </Card>
+      ) : null}
 
       {video && videoUrl ? (
         <Card title="Side-on technique video">
@@ -190,6 +287,14 @@ export default async function SessionPage({ params }: { params: { id: string } }
               ))}
             </div>
           ) : null}
+        </Card>
+      ) : sprint ? (
+        <Card title="Side-on technique video">
+          <AddVideoToSprint
+            sprintId={sprint.id}
+            athleteId={athlete.id}
+            sessionId={session.id}
+          />
         </Card>
       ) : null}
 

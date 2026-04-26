@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { supabaseServer } from "@/lib/supabase/server";
 import { Card } from "@/components/ui";
-import AddAthleteForm from "./AddAthleteForm";
+import DeleteButton from "@/components/DeleteButton";
+import AthleteForm from "./AthleteForm";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,7 @@ export default async function AthletesPage() {
   return (
     <div className="space-y-8">
       <Card title="Add athlete">
-        <AddAthleteForm />
+        <AthleteForm />
       </Card>
       <Card title="Roster">
         {!athletes || athletes.length === 0 ? (
@@ -43,12 +44,15 @@ export default async function AthletesPage() {
                     {a.body_mass_kg != null ? `${a.body_mass_kg} kg` : "—"}
                   </td>
                   <td className="py-2 pr-4">
-                    <Link
-                      href={`/athletes/${a.id}`}
-                      className="text-ppa-accent hover:underline"
-                    >
-                      View →
-                    </Link>
+                    <div className="flex items-center gap-3">
+                      <Link
+                        href={`/athletes/${a.id}`}
+                        className="text-ppa-accent hover:underline"
+                      >
+                        View →
+                      </Link>
+                      <DeleteButton table="athletes" id={a.id} label={a.full_name} />
+                    </div>
                   </td>
                 </tr>
               ))}

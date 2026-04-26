@@ -4,23 +4,44 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { Button, Field, Row, Select, TextInput } from "@/components/ui";
-import type { LevelEnum, PositionGroupEnum, SexEnum, SportEnum } from "@/types/database";
+import type {
+  Athlete,
+  LevelEnum,
+  PositionGroupEnum,
+  SexEnum,
+  SportEnum,
+} from "@/types/database";
 
-export default function AddAthleteForm() {
+type Props = {
+  /** Pass an existing athlete to render as an edit form. Omit for "add new". */
+  initial?: Athlete;
+  /** Hide the secondary cancel button. */
+  hideCancel?: boolean;
+  onCancel?: () => void;
+};
+
+export default function AthleteForm({ initial, hideCancel, onCancel }: Props) {
   const router = useRouter();
+  const isEdit = !!initial;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [fullName, setFullName] = useState("");
-  const [dob, setDob] = useState("");
-  const [sex, setSex] = useState<SexEnum>("male");
-  const [sport, setSport] = useState<SportEnum>("rugby_union");
-  const [level, setLevel] = useState<LevelEnum>("club");
-  const [position, setPosition] = useState("");
-  const [positionGroup, setPositionGroup] = useState<PositionGroupEnum>("back");
-  const [team, setTeam] = useState("");
-  const [bodyMass, setBodyMass] = useState("");
-  const [height, setHeight] = useState("");
+  const [fullName, setFullName] = useState(initial?.full_name ?? "");
+  const [dob, setDob] = useState(initial?.date_of_birth ?? "");
+  const [sex, setSex] = useState<SexEnum>(initial?.sex ?? "male");
+  const [sport, setSport] = useState<SportEnum>(initial?.sport ?? "rugby_union");
+  const [level, setLevel] = useState<LevelEnum>(initial?.level ?? "club");
+  const [position, setPosition] = useState(initial?.position ?? "");
+  const [positionGroup, setPositionGroup] = useState<PositionGroupEnum>(
+    initial?.position_group ?? "back",
+  );
+  const [team, setTeam] = useState(initial?.team ?? "");
+  const [bodyMass, setBodyMass] = useState(
+    initial?.body_mass_kg != null ? String(initial.body_mass_kg) : "",
+  );
+  const [height, setHeight] = useState(
+    initial?.height_cm != null ? String(initial.height_cm) : "",
+  );
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -31,7 +52,7 @@ export default function AddAthleteForm() {
     setBusy(true);
     setError(null);
     const sb = supabaseBrowser();
-    const { error } = await sb.from("athletes").insert({
+    const payload = {
       full_name: fullName.trim(),
       date_of_birth: dob || null,
       sex,
@@ -42,19 +63,25 @@ export default function AddAthleteForm() {
       team: team.trim() || null,
       body_mass_kg: bodyMass ? Number(bodyMass) : null,
       height_cm: height ? Number(height) : null,
-    });
+    };
+    const { error } = isEdit
+      ? await sb.from("athletes").update(payload).eq("id", initial!.id)
+      : await sb.from("athletes").insert(payload);
     setBusy(false);
     if (error) {
       setError(error.message);
       return;
     }
-    setFullName("");
-    setDob("");
-    setPosition("");
-    setTeam("");
-    setBodyMass("");
-    setHeight("");
+    if (!isEdit) {
+      setFullName("");
+      setDob("");
+      setPosition("");
+      setTeam("");
+      setBodyMass("");
+      setHeight("");
+    }
     router.refresh();
+    if (isEdit && onCancel) onCancel();
   }
 
   return (
@@ -145,9 +172,16 @@ export default function AddAthleteForm() {
         </Field>
       </Row>
       {error ? <div className="text-sm text-ppa-accent">{error}</div> : null}
-      <Button type="submit" disabled={busy}>
-        {busy ? "Saving…" : "Add athlete"}
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button type="submit" disabled={busy}>
+          {busy ? "Saving…" : isEdit ? "Save changes" : "Add athlete"}
+        </Button>
+        {isEdit && !hideCancel ? (
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            Cancel
+          </Button>
+        ) : null}
+      </div>
     </form>
   );
 }

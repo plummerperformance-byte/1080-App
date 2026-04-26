@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { supabaseServer } from "@/lib/supabase/server";
-import { Card, Pill } from "@/components/ui";
+import { Card } from "@/components/ui";
+import DeleteButton from "@/components/DeleteButton";
+import EditableHeader from "./EditableHeader";
 import TrendCharts from "./TrendCharts";
 
 export const dynamic = "force-dynamic";
@@ -33,24 +35,7 @@ export default async function AthleteDetailPage({ params }: { params: { id: stri
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{athlete.full_name}</h1>
-          <div className="mt-1 flex flex-wrap gap-2 text-sm text-ppa-muted">
-            <Pill>{athlete.sport}</Pill>
-            <Pill>{athlete.level}</Pill>
-            {athlete.position ? <Pill>{athlete.position}</Pill> : null}
-            <Pill>{athlete.position_group}</Pill>
-            {athlete.body_mass_kg ? <Pill>{athlete.body_mass_kg} kg</Pill> : null}
-          </div>
-        </div>
-        <Link
-          href={`/upload?athlete=${athlete.id}`}
-          className="rounded-md bg-ppa-navy px-4 py-2 text-sm font-medium text-white hover:bg-black"
-        >
-          New session
-        </Link>
-      </div>
+      <EditableHeader athlete={athlete} />
 
       <Card title="Trend across sessions">
         {trend.length === 0 ? (
@@ -90,12 +75,19 @@ export default async function AthleteDetailPage({ params }: { params: { id: stri
                     {s.best_40m_s != null ? s.best_40m_s.toFixed(2) : "—"}
                   </td>
                   <td className="py-2 pr-4">
-                    <Link
-                      href={`/sessions/${s.session_id}`}
-                      className="text-ppa-accent hover:underline"
-                    >
-                      View →
-                    </Link>
+                    <div className="flex items-center gap-3">
+                      <Link
+                        href={`/sessions/${s.session_id}`}
+                        className="text-ppa-accent hover:underline"
+                      >
+                        View →
+                      </Link>
+                      <DeleteButton
+                        table="sessions"
+                        id={s.session_id}
+                        label={`session on ${s.session_date}`}
+                      />
+                    </div>
                   </td>
                 </tr>
               ))}

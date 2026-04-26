@@ -11,14 +11,19 @@ The full build spec lives in [`reference/SPEC.md`](reference/SPEC.md).
 
 **Phase 1 — 1080 sprint analytics**
 
-- Athletes page with add-athlete form
+- Athletes page with add / edit / delete (inline edit toggle on the detail page)
 - Athlete detail page with six trend charts (Max V, F₀ rel, V₀, Pmax rel, 10m, 40m)
 - Upload page that parses 1080 xlsx in the browser, previews metrics, saves to Supabase
+- Body mass override at upload — recomputes F₀ / Pmax for that sprint
+- Plain-English parse errors when a non-1080 xlsx gets dropped
+- Multi-sprint per session — add as many sprints as you want via "+ Add sprint", best one is highlighted
 - Session detail page with five rank-banded headline cards, splits chart, full metrics grid, per-step table
+- Delete buttons on athletes / sessions / individual sprints (cascade-safe via FK)
 
 **Phase 2 — sprint technique video tracker** *(new — Apr 2026)*
 
-- Drop a side-on sprint video alongside the 1080 xlsx on the upload page
+- Drop a side-on sprint video alongside the 1080 xlsx on the upload page (or attach a video later from the session page)
+- Mobile-friendly: tapping the video upload on a phone opens the camera directly via `capture="environment"`
 - Browser-side MediaPipe Pose Landmarker extracts 33 keypoints per frame
 - Custom layer derives:
   - Joint angles (trunk lean, hip flexion, knee flexion, ankle dorsiflexion, hip extension)

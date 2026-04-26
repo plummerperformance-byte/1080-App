@@ -81,23 +81,71 @@ export interface ChartSample {
   x: number;
 }
 
+export class ParserError extends Error {
+  code: ParserErrorCode;
+  hint: string;
+  constructor(code: ParserErrorCode, message: string, hint: string) {
+    super(message);
+    this.name = "ParserError";
+    this.code = code;
+    this.hint = hint;
+  }
+}
+
+export type ParserErrorCode =
+  | "not_xlsx"
+  | "no_raw_data_sheet"
+  | "no_samples"
+  | "too_short"
+  | "no_body_mass";
+
 export async function parse1080File(file: File | ArrayBuffer): Promise<ParsedSprint> {
   const buf = file instanceof ArrayBuffer ? file : await file.arrayBuffer();
-  const wb = XLSX.read(buf, { type: "array", cellDates: false });
+  let wb: XLSX.WorkBook;
+  try {
+    wb = XLSX.read(buf, { type: "array", cellDates: false });
+  } catch {
+    throw new ParserError(
+      "not_xlsx",
+      "Couldn't open this file as a spreadsheet.",
+      "Make sure it's a .xlsx exported from the 1080 Sprint tablet, not a CSV or PDF.",
+    );
+  }
 
   const rawSheetName = wb.SheetNames.find((n) => n.startsWith("Raw Data"));
-  if (!rawSheetName) throw new Error("No 'Raw Data' sheet found in workbook.");
+  if (!rawSheetName) {
+    throw new ParserError(
+      "no_raw_data_sheet",
+      "This doesn't look like a 1080 Sprint export.",
+      `Expected a sheet named "Raw Data <date>". Found: ${wb.SheetNames.slice(0, 5).join(", ") || "(none)"}.`,
+    );
+  }
   const raw = wb.Sheets[rawSheetName];
 
   const samples = extractSprintSamples(raw);
+  if (samples.length === 0) {
+    throw new ParserError(
+      "no_samples",
+      "No sprint samples found in the Raw Data sheet.",
+      "Re-export from the 1080 tablet and check the file isn't truncated.",
+    );
+  }
   if (samples.length < 100) {
-    throw new Error(
-      `Sprint has only ${samples.length} samples — too short to analyse. Expected >1000 at 1 kHz sampling.`,
+    throw new ParserError(
+      "too_short",
+      `Only ${samples.length} samples — sprint is too short to analyse.`,
+      "Expected >1000 samples at 1 kHz. Was the recording cut off?",
     );
   }
 
   const bodyMassKg = pickFirstNumber(raw, "L") ?? 0;
-  if (!bodyMassKg) throw new Error("Could not read athlete body mass from Raw Data col L.");
+  if (!bodyMassKg) {
+    throw new ParserError(
+      "no_body_mass",
+      "Could not read athlete body mass from the file.",
+      "Check column L of the Raw Data sheet — body mass should be in the first row.",
+    );
+  }
 
   const avgLoadG = meanColumn(raw, "K", samples.length);
   const avgLoadKg = avgLoadG / 1000;
