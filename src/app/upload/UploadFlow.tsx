@@ -166,6 +166,7 @@ export default function UploadFlow({
         profile_classification: parsed.classification.fvBalance,
         weakest_split: parsed.classification.sprintProfile,
         fv_profile_valid: parsed.fvProfileValid,
+        chart_samples: parsed.chartSamples,
       });
       if (metricsErr) throw new Error(metricsErr.message);
 

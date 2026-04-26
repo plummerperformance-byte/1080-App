@@ -111,6 +111,7 @@ export type SprintMetrics = {
   profile_classification: string | null;
   weakest_split: string | null;
   fv_profile_valid: boolean;
+  chart_samples: Array<{ t: number; v: number; x: number }> | null;
   created_at: string;
   updated_at: string;
 };

@@ -4,7 +4,7 @@ import { supabaseServer } from "@/lib/supabase/server";
 import { Card, Metric, Pill, RankCard } from "@/components/ui";
 import { rankValue, selectNorm, type Rank } from "@/lib/norms";
 import type { Norm } from "@/types/database";
-import VideoPlayback from "./VideoPlayback";
+import SyncedSessionView from "./SyncedSessionView";
 import SplitsChart from "./SplitsChart";
 
 export const dynamic = "force-dynamic";
@@ -79,6 +79,21 @@ export default async function SessionPage({ params }: { params: { id: string } }
     videoUrl = signed?.signedUrl ?? null;
   }
 
+  const { data: poseFramesRaw } = video
+    ? await sb
+        .from("pose_frames")
+        .select("t_s, keypoints")
+        .eq("video_id", video.id)
+        .order("t_s", { ascending: true })
+    : { data: [] };
+  const poseFrames = (poseFramesRaw ?? []).map((f) => ({
+    t_s: Number(f.t_s),
+    keypoints: f.keypoints as Record<
+      string,
+      { x: number; y: number; z: number; visibility: number }
+    >,
+  }));
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -117,14 +132,19 @@ export default async function SessionPage({ params }: { params: { id: string } }
 
       {video && videoUrl ? (
         <Card title="Side-on technique video">
-          <VideoPlayback
+          <SyncedSessionView
             videoUrl={videoUrl}
+            videoId={video.id}
             videoMeta={{
               fps: video.fps,
               cameraSide: video.camera_side,
               widthPx: video.width_px,
               heightPx: video.height_px,
+              syncOffsetMs: video.sync_offset_ms ?? 0,
             }}
+            poseFrames={poseFrames}
+            chartSamples={(m?.chart_samples as { t: number; v: number; x: number }[] | null) ?? null}
+            tMaxVS={m?.time_to_max_v_s ?? null}
           />
           {technique.length ? (
             <div className="mt-4 grid gap-3 md:grid-cols-3">

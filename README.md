@@ -98,8 +98,9 @@ reference/                         Original spec + sample xlsx + parser source
 - [x] Browser-side MediaPipe pose analysis runs on dropped video
 - [x] Per-frame joint angles + gait events persisted
 - [x] Session page replays the video with technique panel
-- [ ] Frame-by-frame stick-figure overlay on the session page *(roadmap)*
-- [ ] Manual sync-offset slider for video ↔ 1080 alignment *(roadmap)*
+- [x] Frame-by-frame stick-figure overlay drawn on the playing video
+- [x] Synced velocity chart that scrubs the video on click
+- [x] Manual sync-offset slider for video ↔ 1080 alignment, persisted to `sprint_videos.sync_offset_ms`
 
 ## Known caveats
 
@@ -107,8 +108,8 @@ reference/                         Original spec + sample xlsx + parser source
   at high motion blur. Switch to Heavy via `analyser.ts` `POSE_MODEL_URL` if needed.
 - **Foot-strike detection** — ankle-Y heuristic is ~±15ms vs. force plate. Good enough for
   rugby-relative coaching, not for biomechanics research.
-- **Video timeline ↔ 1080 timeline** — `sync_offset_ms` is currently always 0. A manual slider
-  on the session page is on the roadmap. For now, start the video at the same instant as the
-  1080 sprint to keep them aligned.
+- **Video timeline ↔ 1080 timeline** — the session page now has a manual sync slider that
+  persists per-video. Drag until the foot strike on screen lines up with the velocity
+  inflection on the chart.
 - **Video storage** — videos go into the same `raw-1080-files` bucket. Supabase free tier
   caps at 1 GB; budget ~5–20 MB per sprint clip.
